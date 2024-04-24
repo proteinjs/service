@@ -1,6 +1,6 @@
 {
     "name": "@proteinjs/service",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "Service api",
     "publishConfig": {
         "access": "public"
@@ -23,7 +23,7 @@
     "dependencies": {
         "@proteinjs/reflection": "1.0.6",
         "@proteinjs/serializer": "1.0.3",
-        "@proteinjs/server-api": "1.0.4",
+        "@proteinjs/server-api": "1.0.5",
         "@proteinjs/user-auth": "1.0.3",
         "@proteinjs/util": "1.0.18"
     },
