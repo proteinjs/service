@@ -2,7 +2,7 @@ import { Route } from '@proteinjs/server-api';
 import { Service } from './Service';
 import { Interface, SourceRepository } from '@proteinjs/reflection';
 import { ServiceExecutor } from './ServiceExecutor';
-import { Logger } from '@proteinjs/util';
+import { Logger, isInstanceOf } from '@proteinjs/util';
 
 export class ServiceRouter implements Route {
   private logger = new Logger(this.constructor.name);
@@ -16,13 +16,13 @@ export class ServiceRouter implements Route {
       const serviceTypes = Object.values(SourceRepository.get().directChildren('@proteinjs/service/Service'));
       for (let serviceType of serviceTypes) {
         this.logger.info(`Loading service: ${serviceType.qualifiedName}`);
-        if (!(serviceType instanceof Interface))
+        if (!isInstanceOf(serviceType, Interface))
           continue;
 
         const service = SourceRepository.get().object<Service>(serviceType.qualifiedName);
-        for (let method of serviceType.methods) {
+        for (let method of (serviceType as Interface).methods) {
           const servicePath = `/service/${serviceType.qualifiedName}/${method.name}`;
-          this.serviceExecutorMap[servicePath] = new ServiceExecutor(service, serviceType, method);
+          this.serviceExecutorMap[servicePath] = new ServiceExecutor(service, serviceType as Interface, method);
         }
       }
     }
