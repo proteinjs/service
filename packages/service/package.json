@@ -16,7 +16,7 @@
     "author": "Brent Bahry",
     "license": "MIT",
     "scripts": {
-        "clean": "rm -rf dist/ generated/ node_modules/ package-lock.json",
+        "clean": "rm -rf dist/ generated/ node_modules/",
         "build": "reflection-build && tsc",
         "watch": "reflection-watch"
     },
