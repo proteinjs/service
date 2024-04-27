@@ -1,6 +1,6 @@
 {
     "name": "@proteinjs/service",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "description": "Service api",
     "publishConfig": {
         "access": "public"
@@ -22,13 +22,13 @@
     },
     "dependencies": {
         "@proteinjs/reflection": "1.0.7",
-        "@proteinjs/serializer": "1.0.4",
-        "@proteinjs/server-api": "1.0.6",
-        "@proteinjs/user-auth": "1.0.4",
+        "@proteinjs/serializer": "1.0.5",
+        "@proteinjs/server-api": "1.0.7",
+        "@proteinjs/user-auth": "1.0.5",
         "@proteinjs/util": "1.1.0"
     },
     "devDependencies": {
-        "@proteinjs/reflection-build": "1.0.11",
+        "@proteinjs/reflection-build": "1.0.12",
         "@types/jest": "29.5.5",
         "@types/node": "14.0.27",
         "jest": "29.7.0",
