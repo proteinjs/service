@@ -17,7 +17,9 @@ export class ServiceRouter implements Route {
       const serviceTypes = Object.values(SourceRepository.get().directChildren('@proteinjs/service/Service'));
       for (const serviceType of serviceTypes) {
         this.logger.info(`Loading service: ${serviceType.qualifiedName}`);
-        if (!isInstanceOf(serviceType, Interface)) continue;
+        if (!isInstanceOf(serviceType, Interface)) {
+          continue;
+        }
 
         const service = SourceRepository.get().object<Service>(serviceType.qualifiedName);
         for (const method of (serviceType as Interface).methods) {

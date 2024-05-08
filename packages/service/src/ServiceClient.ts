@@ -25,11 +25,14 @@ export class ServiceClient {
       },
     });
     const response = await fetch(request);
-    if (response.status != 200)
+    if (response.status != 200) {
       throw new Error(`Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`);
+    }
 
     const body = await response.json();
-    if (body.error) throw new Error(body.error);
+    if (body.error) {
+      throw new Error(body.error);
+    }
 
     return body.serializedReturn;
   }
