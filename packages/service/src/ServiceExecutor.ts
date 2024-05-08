@@ -10,7 +10,7 @@ export class ServiceExecutor {
   constructor(
     public service: Service,
     private _interface: Interface,
-    private method: Method,
+    private method: Method
   ) {
     this.logger = new Logger(`${_interface.name}.${method.name}`, undefined, 2500);
   }
@@ -26,10 +26,8 @@ export class ServiceExecutor {
 
     let _return: any;
     try {
-      if (this.service.serviceMetadata?.doNotAwait)
-        method(...deserializedArgs);
-      else
-        _return = await method(...deserializedArgs);
+      if (this.service.serviceMetadata?.doNotAwait) method(...deserializedArgs);
+      else _return = await method(...deserializedArgs);
     } catch (error: any) {
       this.logger.error(`Failed with args:\n${JSON.stringify(requestBody, null, 2)}`);
       throw error;
