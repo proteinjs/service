@@ -6,7 +6,7 @@ import { Logger, isInstanceOf } from '@proteinjs/util';
 
 export class ServiceRouter implements Route {
   private logger = new Logger(this.constructor.name);
-  private serviceExecutorMap: {[path: string]: ServiceExecutor}|undefined;
+  private serviceExecutorMap: { [path: string]: ServiceExecutor } | undefined;
   path = 'service/*';
   method: 'post' = 'post';
 
@@ -14,13 +14,14 @@ export class ServiceRouter implements Route {
     if (!this.serviceExecutorMap) {
       this.serviceExecutorMap = {};
       const serviceTypes = Object.values(SourceRepository.get().directChildren('@proteinjs/service/Service'));
-      for (let serviceType of serviceTypes) {
+      for (const serviceType of serviceTypes) {
         this.logger.info(`Loading service: ${serviceType.qualifiedName}`);
-        if (!isInstanceOf(serviceType, Interface))
+        if (!isInstanceOf(serviceType, Interface)) {
           continue;
+        }
 
         const service = SourceRepository.get().object<Service>(serviceType.qualifiedName);
-        for (let method of (serviceType as Interface).methods) {
+        for (const method of (serviceType as Interface).methods) {
           const servicePath = `/service/${serviceType.qualifiedName}/${method.name}`;
           this.serviceExecutorMap[servicePath] = new ServiceExecutor(service, serviceType as Interface, method);
         }
@@ -31,20 +32,20 @@ export class ServiceRouter implements Route {
   }
 
   async onRequest(request: any, response: any): Promise<any> {
-      const serviceExecutor = this.getServiceExecutorMap()[request.path];
-      if (!serviceExecutor) {
-        const error = `Unable to find service matching path: ${request.path}`;
-        this.logger.error(error);
-        response.send({ error });
-        return;
-      }
+    const serviceExecutor = this.getServiceExecutorMap()[request.path];
+    if (!serviceExecutor) {
+      const error = `Unable to find service matching path: ${request.path}`;
+      this.logger.error(error);
+      response.send({ error });
+      return;
+    }
 
-      try {
-        const serializedReturn = await serviceExecutor.execute(request.body);
-        response.send({ serializedReturn });
-      } catch (error: any) {
-        this.logger.error(error.stack);
-        response.send({ error: error.message });
-      }
+    try {
+      const serializedReturn = await serviceExecutor.execute(request.body);
+      response.send({ serializedReturn });
+    } catch (error: any) {
+      this.logger.error(error.stack);
+      response.send({ error: error.message });
+    }
   }
 }

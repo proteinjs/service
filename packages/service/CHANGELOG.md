@@ -7,10 +7,6 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 **Note:** Version bump only for package @proteinjs/service
 
-
-
-
-
 ## 1.0.1 (2024-04-19)
 
 **Note:** Version bump only for package @proteinjs/service
