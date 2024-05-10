@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.10](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.9...@proteinjs/service@1.0.10) (2024-05-10)
+
+
+### Bug Fixes
+
+* add linting and lint all files ([a5e5e07](https://github.com/proteinjs/service/commit/a5e5e07806eeb958fcbe65f1ae2f33be97aae792))
+
+
+
+
+
 ## [1.0.5](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.4...@proteinjs/service@1.0.5) (2024-04-24)
 
 **Note:** Version bump only for package @proteinjs/service
