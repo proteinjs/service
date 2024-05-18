@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.14](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.13...@proteinjs/service@1.0.14) (2024-05-18)
+
+
+### Bug Fixes
+
+* `ServiceClient` now collapses request and response objects in logs, and adds a request number ([d070169](https://github.com/proteinjs/service/commit/d0701698683826bd01ba767dee9986be9fe53cc5))
+
+
+
+
+
 ## [1.0.11](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.10...@proteinjs/service@1.0.11) (2024-05-10)
 
 
