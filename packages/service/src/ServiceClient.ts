@@ -2,15 +2,22 @@ import { Serializer } from '@proteinjs/serializer';
 import { Logger } from '@proteinjs/util';
 
 export class ServiceClient {
+  private static requestCounter = 1;
   private logger = new Logger(this.constructor.name, 'info', 2000);
 
   constructor(private servicePath: string) {}
 
   async send(...args: any[]): Promise<any> {
     const serializedArgs = Serializer.serialize(args);
-    this.logger.info(`Sending service request: ${this.servicePath}, args:\n${serializedArgs}`);
+    const requestNumber = ServiceClient.requestCounter;
+    ServiceClient.requestCounter++;
+    console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
+    console.log(serializedArgs);
+    console.groupEnd();
     const serializedReturn = await this._send(this.servicePath, serializedArgs);
-    this.logger.info(`Received service response: ${this.servicePath}, return:\n${serializedReturn}`);
+    console.groupCollapsed(`[#${requestNumber}] Received service response: ${this.servicePath}, return:`);
+    console.log(serializedReturn);
+    console.groupEnd();
     return Serializer.deserialize(serializedReturn);
   }
 
