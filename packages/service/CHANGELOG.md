@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.17](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.16...@proteinjs/service@1.0.17) (2024-05-23)
+
+
+### Bug Fixes
+
+* logging of returned objects should be more clear when the service method is void ([cdfe631](https://github.com/proteinjs/service/commit/cdfe631a2859a1ccd2de210232a4b3b58c86e094))
+
+
+
+
+
 ## [1.0.14](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.13...@proteinjs/service@1.0.14) (2024-05-18)
 
 
