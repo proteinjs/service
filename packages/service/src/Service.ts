@@ -37,7 +37,7 @@ export const serviceFactory = <T extends Service>(serviceInterfaceQualifiedName:
     const serviceInterface = SourceRepository.get().interface(serviceInterfaceQualifiedName);
     for (const method of serviceInterface.methods) {
       const servicePath = `/service/${serviceInterface.qualifiedName}/${method.name}`;
-      const serviceClient = new ServiceClient(servicePath);
+      const serviceClient = new ServiceClient(servicePath, method);
       service[method.name] = serviceClient.send.bind(serviceClient);
     }
 

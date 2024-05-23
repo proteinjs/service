@@ -3,6 +3,7 @@ import { Service } from './Service';
 import { Logger } from '@proteinjs/util';
 import { Serializer } from '@proteinjs/serializer';
 import { ServiceAuth } from './ServiceAuth';
+import { isVoidReturnType } from './isVoidReturnType';
 
 export class ServiceExecutor {
   private logger: Logger;
@@ -35,6 +36,12 @@ export class ServiceExecutor {
       this.logger.error(`Failed with args:\n${JSON.stringify(requestBody, null, 2)}`);
       throw error;
     }
+
+    if (isVoidReturnType(this.method)) {
+      this.logger.info(`Returning: (void)`);
+      return undefined;
+    }
+
     const serializedReturn = Serializer.serialize(_return);
     this.logger.info(`Returning:\n${serializedReturn}`);
     return serializedReturn;

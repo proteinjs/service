@@ -1,11 +1,16 @@
+import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Logger } from '@proteinjs/util';
+import { isVoidReturnType } from './isVoidReturnType';
 
 export class ServiceClient {
   private static requestCounter = 1;
   private logger = new Logger(this.constructor.name, 'info', 2000);
 
-  constructor(private servicePath: string) {}
+  constructor(
+    private servicePath: string,
+    private serviceMethod: Method
+  ) {}
 
   async send(...args: any[]): Promise<any> {
     const serializedArgs = Serializer.serialize(args);
@@ -15,9 +20,12 @@ export class ServiceClient {
     console.log(serializedArgs);
     console.groupEnd();
     const serializedReturn = await this._send(this.servicePath, serializedArgs);
-    console.groupCollapsed(`[#${requestNumber}] Received service response: ${this.servicePath}, return:`);
+    console.groupCollapsed(
+      `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
+    );
     console.log(serializedReturn);
     console.groupEnd();
+
     return Serializer.deserialize(serializedReturn);
   }
 
