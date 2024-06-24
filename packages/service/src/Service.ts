@@ -30,7 +30,7 @@ export interface Service extends Loadable {
  * Create a factory that creates an instance of the Service. The Service instance is a
  * ServiceClient wrapped in the interface's api.
  * @param serviceInterfaceQualifiedName the package-qualified name of the service interface (ie. service-package-name/MyService)
- * @param debouncer optionally pass in an instance of debouncer to use if you want to limit service client calls
+ * @param debouncer optionally pass in an instance of debouncer if you want to limit service client calls
  * @returns a function that creates a Service
  */
 export const serviceFactory = <T extends Service>(
