@@ -2,6 +2,7 @@ import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Logger } from '@proteinjs/util';
 import { isVoidReturnType } from './isVoidReturnType';
+import { Debouncer } from './Debouncer';
 
 export class ServiceClient {
   private static requestCounter = 1;
@@ -9,24 +10,33 @@ export class ServiceClient {
 
   constructor(
     private servicePath: string,
-    private serviceMethod: Method
+    private serviceMethod: Method,
+    private debouncer?: Debouncer
   ) {}
 
   async send(...args: any[]): Promise<any> {
-    const serializedArgs = Serializer.serialize(args);
-    const requestNumber = ServiceClient.requestCounter;
-    ServiceClient.requestCounter++;
-    console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
-    console.log(serializedArgs);
-    console.groupEnd();
-    const serializedReturn = await this._send(this.servicePath, serializedArgs);
-    console.groupCollapsed(
-      `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
-    );
-    console.log(serializedReturn);
-    console.groupEnd();
+    const sendRequest = async () => {
+      const serializedArgs = Serializer.serialize(args);
+      const requestNumber = ServiceClient.requestCounter;
+      ServiceClient.requestCounter++;
+      console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
+      console.log(serializedArgs);
+      console.groupEnd();
+      const serializedReturn = await this._send(this.servicePath, serializedArgs);
+      console.groupCollapsed(
+        `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
+      );
+      console.log(serializedReturn);
+      console.groupEnd();
 
-    return Serializer.deserialize(serializedReturn);
+      return Serializer.deserialize(serializedReturn);
+    };
+
+    if (this.debouncer) {
+      this.debouncer.debounce(sendRequest);
+    } else {
+      return sendRequest();
+    }
   }
 
   private async _send(absoluteUrl: string, serializedArgs: string) {

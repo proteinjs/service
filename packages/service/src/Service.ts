@@ -1,6 +1,7 @@
 import { SerializableFunction, NotFunction } from '@proteinjs/serializer';
 import { Loadable, SourceRepository, Method } from '@proteinjs/reflection';
 import { ServiceClient } from './ServiceClient';
+import { Debouncer } from './Debouncer';
 
 export interface Service extends Loadable {
   serviceMetadata?: {
@@ -29,15 +30,19 @@ export interface Service extends Loadable {
  * Create a factory that creates an instance of the Service. The Service instance is a
  * ServiceClient wrapped in the interface's api.
  * @param serviceInterfaceQualifiedName the package-qualified name of the service interface (ie. service-package-name/MyService)
+ * @param debouncer optionally pass in an instance of debouncer to use if you want to limit service client calls
  * @returns a function that creates a Service
  */
-export const serviceFactory = <T extends Service>(serviceInterfaceQualifiedName: string): (() => T) => {
+export const serviceFactory = <T extends Service>(
+  serviceInterfaceQualifiedName: string,
+  debouncer?: Debouncer
+): (() => T) => {
   return () => {
     const service: any = {};
     const serviceInterface = SourceRepository.get().interface(serviceInterfaceQualifiedName);
     for (const method of serviceInterface.methods) {
       const servicePath = `/service/${serviceInterface.qualifiedName}/${method.name}`;
-      const serviceClient = new ServiceClient(servicePath, method);
+      const serviceClient = new ServiceClient(servicePath, method, debouncer);
       service[method.name] = serviceClient.send.bind(serviceClient);
     }
 
