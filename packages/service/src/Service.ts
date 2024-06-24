@@ -1,7 +1,7 @@
 import { SerializableFunction, NotFunction } from '@proteinjs/serializer';
-import { Loadable, SourceRepository, Method } from '@proteinjs/reflection';
+import { Loadable, SourceRepository } from '@proteinjs/reflection';
 import { ServiceClient } from './ServiceClient';
-import { Debouncer } from './Debouncer';
+import { Debouncer } from '@proteinjs/util';
 
 export interface Service extends Loadable {
   serviceMetadata?: {

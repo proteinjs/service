@@ -1,8 +1,7 @@
 import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
-import { Logger } from '@proteinjs/util';
+import { Debouncer, Logger } from '@proteinjs/util';
 import { isVoidReturnType } from './isVoidReturnType';
-import { Debouncer } from './Debouncer';
 
 export class ServiceClient {
   private static requestCounter = 1;
