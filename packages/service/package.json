@@ -1,6 +1,6 @@
 {
   "name": "@proteinjs/service",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "description": "Service api",
   "publishConfig": {
     "access": "public"

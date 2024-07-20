@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.23](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.22...@proteinjs/service@1.0.23) (2024-07-20)
+
+
+### Bug Fixes
+
+* updated service logging to log objects without serialization metadata ([8614452](https://github.com/proteinjs/service/commit/86144527b48c35ed95fe6e337f29b027195399ee))
+
+
+
+
+
 ## [1.0.17](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.16...@proteinjs/service@1.0.17) (2024-05-23)
 
 
