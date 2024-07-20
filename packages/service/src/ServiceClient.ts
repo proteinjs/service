@@ -19,16 +19,17 @@ export class ServiceClient {
       const requestNumber = ServiceClient.requestCounter;
       ServiceClient.requestCounter++;
       console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
-      console.log(serializedArgs);
+      console.log(args);
       console.groupEnd();
       const serializedReturn = await this._send(this.servicePath, serializedArgs);
+      const deserializedReturn = Serializer.deserialize(serializedReturn);
       console.groupCollapsed(
         `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
       );
-      console.log(serializedReturn);
+      console.log(deserializedReturn);
       console.groupEnd();
 
-      return Serializer.deserialize(serializedReturn);
+      return deserializedReturn;
     };
 
     if (this.debouncer) {

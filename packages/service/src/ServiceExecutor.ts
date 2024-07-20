@@ -17,9 +17,9 @@ export class ServiceExecutor {
   }
 
   async execute(requestBody: any): Promise<any> {
-    this.logger.info(`Executing with args:\n${JSON.stringify(requestBody, null, 2)}`);
     const method = this.service[this.method.name].bind(this.service);
     const deserializedArgs = Serializer.deserialize(requestBody);
+    this.logger.info(`Executing with args:\n${JSON.stringify(deserializedArgs, null, 2)}`);
     if (!ServiceAuth.canRunService(this.service, this.method, deserializedArgs)) {
       const error = `User not authorized to run service: ${this._interface.name}.${this.method.name}`;
       throw new Error(error);
@@ -43,7 +43,7 @@ export class ServiceExecutor {
     }
 
     const serializedReturn = Serializer.serialize(_return);
-    this.logger.info(`Returning:\n${serializedReturn}`);
+    this.logger.info(`Returning:\n${JSON.stringify(_return, null, 2)}`);
     return serializedReturn;
   }
 }
