@@ -2,10 +2,11 @@ import { Route } from '@proteinjs/server-api';
 import { Service } from './Service';
 import { Interface, SourceRepository } from '@proteinjs/reflection';
 import { ServiceExecutor } from './ServiceExecutor';
-import { Logger, isInstanceOf } from '@proteinjs/util';
+import { isInstanceOf } from '@proteinjs/util';
+import { Logger } from '@proteinjs/logger';
 
 export class ServiceRouter implements Route {
-  private logger = new Logger(this.constructor.name);
+  private logger = new Logger({ name: this.constructor.name });
   private serviceExecutorMap: { [path: string]: ServiceExecutor } | undefined;
   path = 'service/*';
   method: 'post' = 'post';
@@ -15,7 +16,7 @@ export class ServiceRouter implements Route {
       this.serviceExecutorMap = {};
       const serviceTypes = Object.values(SourceRepository.get().directChildren('@proteinjs/service/Service'));
       for (const serviceType of serviceTypes) {
-        this.logger.info(`Loading service: ${serviceType.qualifiedName}`);
+        this.logger.info({ message: `Loading service: ${serviceType.qualifiedName}` });
         if (!isInstanceOf(serviceType, Interface)) {
           continue;
         }
@@ -35,7 +36,7 @@ export class ServiceRouter implements Route {
     const serviceExecutor = this.getServiceExecutorMap()[request.path];
     if (!serviceExecutor) {
       const error = `Unable to find service matching path: ${request.path}`;
-      this.logger.error(error);
+      this.logger.error({ message: error });
       response.send({ error });
       return;
     }
@@ -44,7 +45,7 @@ export class ServiceRouter implements Route {
       const serializedReturn = await serviceExecutor.execute(request.body);
       response.send({ serializedReturn });
     } catch (error: any) {
-      this.logger.error(error.stack);
+      this.logger.error({ error });
       response.send({ error: error.message });
     }
   }
