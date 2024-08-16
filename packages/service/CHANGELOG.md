@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.28](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.27...@proteinjs/service@1.0.28) (2024-08-16)
+
+
+### Bug Fixes
+
+* refactored to implement new @proteinjs/logger/Logger api ([64960ad](https://github.com/proteinjs/service/commit/64960ade33b0f9f85891e9abaf0dbba35e695d0c))
+
+
+
+
+
 ## [1.0.23](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.22...@proteinjs/service@1.0.23) (2024-07-20)
 
 
