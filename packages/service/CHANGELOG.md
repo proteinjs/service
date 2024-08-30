@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.0.32](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.31...@proteinjs/service@1.0.32) (2024-08-30)
+
+
+### Bug Fixes
+
+* avoid logging twice for service errors ([5f5e593](https://github.com/proteinjs/service/commit/5f5e59377fbd81d90d4607bd6e56aa2865c7e38d))
+
+
+
+
+
 ## [1.0.28](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.27...@proteinjs/service@1.0.28) (2024-08-16)
 
 
