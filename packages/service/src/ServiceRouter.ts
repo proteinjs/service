@@ -1,9 +1,15 @@
 import { Route } from '@proteinjs/server-api';
 import { Service } from './Service';
 import { Interface, SourceRepository } from '@proteinjs/reflection';
-import { ServiceExecutor } from './ServiceExecutor';
+import { ServiceError, ServiceExecutor } from './ServiceExecutor';
 import { isInstanceOf } from '@proteinjs/util';
 import { Logger } from '@proteinjs/logger';
+
+function isServiceError(error: unknown): error is ServiceError {
+  return (
+    typeof error === 'object' && error !== null && 'name' in error && (error as ServiceError).name === 'ServiceError'
+  );
+}
 
 export class ServiceRouter implements Route {
   private logger = new Logger({ name: this.constructor.name });
@@ -45,8 +51,12 @@ export class ServiceRouter implements Route {
       const serializedReturn = await serviceExecutor.execute(request.body);
       response.send({ serializedReturn });
     } catch (error: any) {
-      this.logger.error({ error });
-      response.send({ error: error.message });
+      let errorMessage = error.message;
+      if (!isServiceError(error)) {
+        this.logger.error({ error });
+        errorMessage = 'Internal server error';
+      }
+      response.send({ error: errorMessage });
     }
   }
 }

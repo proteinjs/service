@@ -6,6 +6,13 @@ import { ServiceAuth } from './ServiceAuth';
 import { isVoidReturnType } from './isVoidReturnType';
 import { EnvInfo } from '@proteinjs/server-api';
 
+export class ServiceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ServiceError';
+  }
+}
+
 export class ServiceExecutor {
   private logger: Logger;
   public deserializedArgs: any;
@@ -43,7 +50,7 @@ export class ServiceExecutor {
         error,
         obj: { functionName: this.serviceMethodName, args: deserializedArgs },
       });
-      throw error;
+      throw new ServiceError('Service failed');
     }
 
     if (isVoidReturnType(this.method)) {
