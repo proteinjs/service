@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.1.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.32...@proteinjs/service@1.1.0) (2024-09-09)
+
+
+### Features
+
+* Add retry functionality to serviceFactory with configurable retries per method. Implement RetryConfig type and logic to handle retries for specified service methods. ([cc9627f](https://github.com/proteinjs/service/commit/cc9627fe12aa40920764e0fa2debc1547881b887))
+
+
+
+
+
 ## [1.0.32](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.31...@proteinjs/service@1.0.32) (2024-08-30)
 
 
