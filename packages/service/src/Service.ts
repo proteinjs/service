@@ -3,6 +3,21 @@ import { Loadable, SourceRepository } from '@proteinjs/reflection';
 import { ServiceClient } from './ServiceClient';
 import { Debouncer } from '@proteinjs/util';
 
+type RemoveIndex<T> = {
+  [K in keyof T as string extends K ? never : number extends K ? never : symbol extends K ? never : K]: T[K];
+};
+type KeysWithoutIndexSignature<T> = keyof RemoveIndex<T>;
+
+// Get keys of T that are not in U
+type Diff<T, U> = T extends U ? never : T;
+
+// Get only the keys specific to T, excluding those from Service
+type KeysWithoutService<T extends Service> = Diff<KeysWithoutIndexSignature<T>, KeysWithoutIndexSignature<Service>>;
+
+type RetryConfig<T extends Service> = {
+  [K in KeysWithoutService<T>]?: number;
+};
+
 export interface Service extends Loadable {
   serviceMetadata?: {
     auth?: {
@@ -35,7 +50,8 @@ export interface Service extends Loadable {
  */
 export const serviceFactory = <T extends Service>(
   serviceInterfaceQualifiedName: string,
-  debouncer?: Debouncer
+  debouncer?: Debouncer,
+  retryConfig?: RetryConfig<T>
 ): (() => T) => {
   return () => {
     const service: any = {};
@@ -43,7 +59,28 @@ export const serviceFactory = <T extends Service>(
     for (const method of serviceInterface.methods) {
       const servicePath = `/service/${serviceInterface.qualifiedName}/${method.name}`;
       const serviceClient = new ServiceClient(servicePath, method, debouncer);
-      service[method.name] = serviceClient.send.bind(serviceClient);
+      if (retryConfig && method.name in retryConfig) {
+        const methodName = method.name as KeysWithoutService<T>;
+        const maxRetries = retryConfig[methodName]!;
+        service[method.name] = async (...args: any[]) => {
+          let lastError;
+          for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+              return serviceClient.send.bind(serviceClient)(...args);
+            } catch (error) {
+              lastError = error;
+              if (attempt < maxRetries - 1) {
+                await new Promise((resolve) => setTimeout(resolve, 1000)); // short wait before retrying
+              }
+            }
+          }
+          if (lastError) {
+            throw lastError;
+          }
+        };
+      } else {
+        service[method.name] = serviceClient.send.bind(serviceClient);
+      }
     }
 
     return service;
