@@ -43,7 +43,7 @@ export class ServiceRouter implements Route {
     if (!serviceExecutor) {
       const error = `Unable to find service matching path: ${request.path}`;
       this.logger.error({ message: error });
-      response.send({ error });
+      response.status(404).send({ error });
       return;
     }
 
@@ -56,7 +56,7 @@ export class ServiceRouter implements Route {
         this.logger.error({ error });
         errorMessage = 'Internal server error';
       }
-      response.send({ error: errorMessage });
+      response.status(400).send({ error: errorMessage });
     }
   }
 }

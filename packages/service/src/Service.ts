@@ -58,29 +58,15 @@ export const serviceFactory = <T extends Service>(
     const serviceInterface = SourceRepository.get().interface(serviceInterfaceQualifiedName);
     for (const method of serviceInterface.methods) {
       const servicePath = `/service/${serviceInterface.qualifiedName}/${method.name}`;
-      const serviceClient = new ServiceClient(servicePath, method, debouncer);
+
+      let retryCount = 0;
       if (retryConfig && method.name in retryConfig) {
         const methodName = method.name as KeysWithoutService<T>;
-        const maxRetries = retryConfig[methodName]!;
-        service[method.name] = async (...args: any[]) => {
-          let lastError;
-          for (let attempt = 0; attempt < maxRetries; attempt++) {
-            try {
-              return serviceClient.send.bind(serviceClient)(...args);
-            } catch (error) {
-              lastError = error;
-              if (attempt < maxRetries - 1) {
-                await new Promise((resolve) => setTimeout(resolve, 1000)); // short wait before retrying
-              }
-            }
-          }
-          if (lastError) {
-            throw lastError;
-          }
-        };
-      } else {
-        service[method.name] = serviceClient.send.bind(serviceClient);
+        retryCount = retryConfig[methodName]!;
       }
+
+      const serviceClient = new ServiceClient(servicePath, method, debouncer, retryCount);
+      service[method.name] = serviceClient.send.bind(serviceClient);
     }
 
     return service;

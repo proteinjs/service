@@ -9,7 +9,8 @@ export class ServiceClient {
   constructor(
     private servicePath: string,
     private serviceMethod: Method,
-    private debouncer?: Debouncer
+    private debouncer?: Debouncer,
+    private retryCount: number = 0
   ) {}
 
   async send(...args: any[]): Promise<any> {
@@ -31,10 +32,26 @@ export class ServiceClient {
       return deserializedReturn;
     };
 
+    const executeWithRetry = async (fn: () => Promise<any>) => {
+      const maxAttempts = 1 + this.retryCount;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          return await fn();
+        } catch (error) {
+          if (attempt === maxAttempts - 1) {
+            throw error;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay before retry
+        }
+      }
+    };
+
+    const executeRequest = this.retryCount > 0 ? executeWithRetry : (fn: () => Promise<any>) => fn();
+
     if (this.debouncer) {
-      this.debouncer.debounce(sendRequest);
+      return this.debouncer.debounce(() => executeRequest(sendRequest));
     } else {
-      return sendRequest();
+      return executeRequest(sendRequest);
     }
   }
 
