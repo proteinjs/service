@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.1.1](https://github.com/proteinjs/service/compare/@proteinjs/service@1.1.0...@proteinjs/service@1.1.1) (2024-09-10)
+
+
+### Bug Fixes
+
+* move retry logic into ServiceClient. send 400s in ServiceRouter if there is an error in the routing. ([742aa15](https://github.com/proteinjs/service/commit/742aa15ce505f115e94093fc96e6cac811aaf83e))
+
+
+
+
+
 # [1.1.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.0.32...@proteinjs/service@1.1.0) (2024-09-09)
 
 
