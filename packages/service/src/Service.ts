@@ -89,9 +89,9 @@ export const serviceFactory = <T extends Service>(
         if (isInstanceOf(debouncer, Debouncer)) {
           methodDebouncer = debouncer as Debouncer;
         } else if (methodName in debouncer) {
-          const methodConfig = debouncer[methodName];
+          const methodConfig = (debouncer as MethodDebounceConfig<T>)[methodName];
           if (methodConfig) {
-            methodDebouncer = getOrCreateDebouncer(methodName, methodConfig.waitTime);
+            methodDebouncer = getOrCreateDebouncer(methodName as string, methodConfig.waitTime);
           }
         }
       }
