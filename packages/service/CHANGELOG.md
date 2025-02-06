@@ -3,6 +3,22 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.2.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.1.1...@proteinjs/service@1.2.0) (2025-02-06)
+
+
+### Bug Fixes
+
+* fix typing for the debounce config ([62bb2d6](https://github.com/proteinjs/service/commit/62bb2d646e2c71f2bf5300364cd92bbd95911f21))
+
+
+### Features
+
+* method specific debouncers. allows one service to use multiple debouncers for each method in the service. ([00fa7b2](https://github.com/proteinjs/service/commit/00fa7b23c4960ad9a006d4791e9f5a12f9ab6c89))
+
+
+
+
+
 ## [1.1.1](https://github.com/proteinjs/service/compare/@proteinjs/service@1.1.0...@proteinjs/service@1.1.1) (2024-09-10)
 
 
