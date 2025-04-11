@@ -1,7 +1,7 @@
 import { SerializableFunction, NotFunction } from '@proteinjs/serializer';
 import { Loadable, SourceRepository } from '@proteinjs/reflection';
 import { ServiceClient } from './ServiceClient';
-import { Debouncer, isInstanceOf } from '@proteinjs/util';
+import { Debouncer, GetDebounceKey, isInstanceOf } from '@proteinjs/util';
 
 type RemoveIndex<T> = {
   [K in keyof T as string extends K ? never : number extends K ? never : symbol extends K ? never : K]: T[K];
@@ -20,11 +20,16 @@ type RetryConfig<T extends Service> = {
 
 interface DebounceConfig {
   waitTime: number;
+  getDebounceKey?: GetDebounceKey;
 }
 
 type MethodDebounceConfig<T extends Service> = {
   [K in KeysWithoutService<T>]?: DebounceConfig;
 };
+
+type MethodAwaitConfig = { [methodName: string]: boolean };
+
+export type ServiceDebounceConfig<T extends Service> = MethodDebounceConfig<T> | Debouncer;
 
 export interface Service extends Loadable {
   serviceMetadata?: {
@@ -45,6 +50,8 @@ export interface Service extends Loadable {
     };
     /** Don't await the service's execution, return a response to the client immediately */
     doNotAwait?: boolean;
+    /** Don't await the service's execution, return a response to the client immediately (configured per method) */
+    doNotAwaitMethod?: MethodAwaitConfig;
   };
   [prop: string]: SerializableFunction | NotFunction<any>;
 }
@@ -53,9 +60,9 @@ const debouncerMap: { [key: string]: Debouncer } = {};
 /** Retrieve an existing debouncer from the map or make a new one.
  * This allows the debouncer instance per method to remain the same across multiple service calls.
  */
-function getOrCreateDebouncer(methodName: string, waitTime: number): Debouncer {
+function getOrCreateDebouncer(methodName: string, config: DebounceConfig): Debouncer {
   if (!debouncerMap[methodName]) {
-    debouncerMap[methodName] = new Debouncer(waitTime);
+    debouncerMap[methodName] = new Debouncer(config.waitTime, config.getDebounceKey);
   }
   return debouncerMap[methodName];
 }
@@ -69,7 +76,7 @@ function getOrCreateDebouncer(methodName: string, waitTime: number): Debouncer {
  */
 export const serviceFactory = <T extends Service>(
   serviceInterfaceQualifiedName: string,
-  debouncer?: MethodDebounceConfig<T> | Debouncer,
+  debouncer?: ServiceDebounceConfig<T>,
   retryConfig?: RetryConfig<T>
 ): (() => T) => {
   return () => {
@@ -91,7 +98,7 @@ export const serviceFactory = <T extends Service>(
         } else if (methodName in debouncer) {
           const methodConfig = (debouncer as MethodDebounceConfig<T>)[methodName];
           if (methodConfig) {
-            methodDebouncer = getOrCreateDebouncer(methodName as string, methodConfig.waitTime);
+            methodDebouncer = getOrCreateDebouncer(methodName as string, methodConfig);
           }
         }
       }

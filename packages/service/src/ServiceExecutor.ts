@@ -39,7 +39,7 @@ export class ServiceExecutor {
 
     let _return: any;
     try {
-      if (this.service.serviceMetadata?.doNotAwait) {
+      if (this.doNotAwait()) {
         method(...deserializedArgs);
       } else {
         _return = await method(...deserializedArgs);
@@ -68,6 +68,19 @@ export class ServiceExecutor {
       this.logger.info({ message: `Returning`, obj: { functionName: this.serviceMethodName, return: _return } });
     }
     return serializedReturn;
+  }
+
+  private doNotAwait() {
+    if (this.service.serviceMetadata?.doNotAwait) {
+      return true;
+    }
+
+    if (this.service.serviceMetadata?.doNotAwaitMethod) {
+      const methodDoNotAwait = this.service.serviceMetadata?.doNotAwaitMethod[this.method.name];
+      return typeof methodDoNotAwait === 'boolean' ? methodDoNotAwait : false;
+    }
+
+    return false;
   }
 
   private shouldLogArgsAndReturn() {

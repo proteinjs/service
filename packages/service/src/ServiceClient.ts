@@ -49,7 +49,7 @@ export class ServiceClient {
     const executeRequest = this.retryCount > 0 ? executeWithRetry : (fn: () => Promise<any>) => fn();
 
     if (this.debouncer) {
-      return this.debouncer.debounce(() => executeRequest(sendRequest));
+      return this.debouncer.debounce(() => executeRequest(sendRequest), args);
     } else {
       return executeRequest(sendRequest);
     }
