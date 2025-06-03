@@ -1,6 +1,6 @@
 {
   "name": "@proteinjs/service",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Service api",
   "publishConfig": {
     "access": "public"
@@ -21,15 +21,15 @@
     "watch": "reflection-watch"
   },
   "dependencies": {
-    "@proteinjs/logger": "1.0.9",
+    "@proteinjs/logger": "1.0.10",
     "@proteinjs/reflection": "1.1.10",
-    "@proteinjs/serializer": "1.0.18",
-    "@proteinjs/server-api": "1.5.3",
-    "@proteinjs/user-auth": "1.1.4",
+    "@proteinjs/serializer": "1.0.19",
+    "@proteinjs/server-api": "1.5.4",
+    "@proteinjs/user-auth": "1.1.5",
     "@proteinjs/util": "1.5.0"
   },
   "devDependencies": {
-    "@proteinjs/reflection-build": "1.1.1",
+    "@proteinjs/reflection-build": "1.2.0",
     "@types/jest": "29.5.5",
     "@types/node": "14.0.27",
     "@typescript-eslint/eslint-plugin": "7.8.0",
