@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.3.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.2.15...@proteinjs/service@1.3.0) (2026-07-10)
+
+
+### Features
+
+* export ServiceError ([0e03b92](https://github.com/proteinjs/service/commit/0e03b92baf9fa0e212c4aa53321d318a5fdc136c))
+
+
+
+
+
 # [1.2.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.1.1...@proteinjs/service@1.2.0) (2025-02-06)
 
 
