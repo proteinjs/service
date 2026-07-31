@@ -67,7 +67,7 @@ export class ServiceClient {
     });
     const response = await fetch(request);
     if (response.status != 200) {
-      throw new Error(`Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`);
+      throw new Error(await this.errorMessage(response, absoluteUrl));
     }
 
     const body = await response.json();
@@ -76,5 +76,22 @@ export class ServiceClient {
     }
 
     return body.serializedReturn;
+  }
+
+  /**
+   * The server puts the thrown error's message in the response body ({ error: message }).
+   * Older servers send no message in the body; fall back to statusText for those.
+   */
+  private async errorMessage(response: Response, absoluteUrl: string): Promise<string> {
+    try {
+      const body = await response.json();
+      if (typeof body?.error === 'string' && body.error) {
+        return body.error;
+      }
+    } catch (parseError) {
+      // body was not JSON; fall through to statusText
+    }
+
+    return `Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`;
   }
 }

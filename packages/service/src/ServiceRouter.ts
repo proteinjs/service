@@ -51,12 +51,14 @@ export class ServiceRouter implements Route {
       const serializedReturn = await serviceExecutor.execute(request.body);
       response.send({ serializedReturn });
     } catch (error: any) {
-      let errorMessage = error.message;
-      if (!isServiceError(error)) {
-        this.logger.error({ error });
-        errorMessage = 'Internal server error';
+      if (isServiceError(error)) {
+        // ServiceExecutor wraps service-thrown errors in ServiceError; the message crosses the wire.
+        response.status(400).send({ error: error.message });
+        return;
       }
-      response.status(400).send({ error: errorMessage });
+
+      this.logger.error({ error });
+      response.status(500).send({ error: 'Internal server error' });
     }
   }
 }

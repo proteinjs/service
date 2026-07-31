@@ -6,6 +6,10 @@ import { ServiceAuth } from './ServiceAuth';
 import { isVoidReturnType } from './isVoidReturnType';
 import { EnvInfo } from '@proteinjs/server-api';
 
+/**
+ * An error whose message is safe to send to the client verbatim. ServiceRouter puts it in the
+ * response body; any other error type is masked as 'Internal server error'.
+ */
 export class ServiceError extends Error {
   constructor(message: string) {
     super(message);
@@ -33,8 +37,7 @@ export class ServiceExecutor {
       this.logger.info({ message: `Calling`, obj: { functionName: this.serviceMethodName, args: deserializedArgs } });
     }
     if (!ServiceAuth.canRunService(this.service, this.method, deserializedArgs)) {
-      const error = `User not authorized to run service: ${this._interface.name}.${this.method.name}`;
-      throw new Error(error);
+      throw new ServiceError(`User not authorized to run service: ${this._interface.name}.${this.method.name}`);
     }
 
     let _return: any;
@@ -50,7 +53,9 @@ export class ServiceExecutor {
         error,
         obj: { functionName: this.serviceMethodName, args: deserializedArgs },
       });
-      throw new ServiceError('Service failed');
+      // Services throw plain-words errors deliberately; the message is the user-facing contract.
+      // The stack stays server-side (logged above).
+      throw new ServiceError(error instanceof Error ? error.message : String(error));
     }
 
     if (isVoidReturnType(this.method)) {
