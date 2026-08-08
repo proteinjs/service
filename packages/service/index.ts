@@ -5,3 +5,6 @@ export * from './src/Service';
 // original message, so service messages always reach the client. Exported for layers that throw
 // outside a service method body (e.g. @proteinjs/db TableServiceAuth) and want the same pass-through.
 export { ServiceError } from './src/ServiceExecutor';
+// ServiceClient is the one HTTP transport every service call flows through; exported for the
+// app-level owner of ambient client-context headers (see setDefaultHeadersProvider).
+export { ServiceClient, ServiceRequestHeadersProvider } from './src/ServiceClient';

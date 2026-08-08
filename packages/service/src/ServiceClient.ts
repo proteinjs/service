@@ -3,8 +3,33 @@ import { Serializer } from '@proteinjs/serializer';
 import { Debouncer } from '@proteinjs/util';
 import { isVoidReturnType } from './isVoidReturnType';
 
+/** See {@link ServiceClient.setDefaultHeadersProvider}. */
+export type ServiceRequestHeadersProvider = () => { [headerName: string]: string };
+
 export class ServiceClient {
   private static requestCounter = 1;
+
+  /**
+   * Ambient client-context headers attached to every service request this client sends.
+   *
+   * Some request context is transport-level, not argument-level: it describes the CLIENT
+   * CONNECTION issuing the call, not the call itself — e.g. the socket.io connection id the
+   * issuing browser tab currently holds, which server-side emitters use to mark events as
+   * self-originated so the authoring tab can drop its own echo. Threading that through every
+   * service method signature (and through generic layers like the db service or the
+   * transaction runner, whose APIs must stay transport-agnostic) would smear one concept
+   * across every call site; a request header carries it once, here, at the one place every
+   * service call already flows through.
+   *
+   * ONE slot by design: there is one owner of client-context headers per app (the module that
+   * owns the client's ambient identity — e.g. @n3xah/util-common's OriginSocketContext).
+   * Reserved headers (Content-Type) always win over provider-supplied ones.
+   */
+  private static defaultHeadersProvider: ServiceRequestHeadersProvider | undefined;
+
+  static setDefaultHeadersProvider(provider: ServiceRequestHeadersProvider | undefined): void {
+    ServiceClient.defaultHeadersProvider = provider;
+  }
 
   constructor(
     private servicePath: string,
@@ -62,6 +87,8 @@ export class ServiceClient {
       redirect: 'follow',
       credentials: 'same-origin',
       headers: {
+        // Provider-supplied client-context headers first so reserved headers always win.
+        ...(ServiceClient.defaultHeadersProvider ? ServiceClient.defaultHeadersProvider() : {}),
         'Content-Type': 'application/json',
       },
     });
