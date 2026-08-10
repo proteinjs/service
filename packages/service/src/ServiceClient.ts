@@ -6,8 +6,45 @@ import { isVoidReturnType } from './isVoidReturnType';
 /** See {@link ServiceClient.setDefaultHeadersProvider}. */
 export type ServiceRequestHeadersProvider = () => { [headerName: string]: string };
 
+/**
+ * Header marking a service request as BACKGROUND: machine-initiated (a timer tick, a reconnect
+ * probe, a telemetry flush) rather than caused by a person doing something. Attached by
+ * {@link ServiceClient.markBackground} — the one owner of the marker in the client fetch layer.
+ * Server-side dev tooling reads it to tell machine chatter from real activity (e.g. the
+ * serve-package request-activity hold, which must not treat a merely-open tab's polls as a
+ * reason to defer restarts); production servers ignore it.
+ */
+export const BACKGROUND_REQUEST_HEADER = 'x-background-request';
+
 export class ServiceClient {
   private static requestCounter = 1;
+
+  /**
+   * Depth of the currently-executing {@link markBackground} scope. A synchronous counter is
+   * race-free in single-threaded JS: it is >0 exactly while a marked callback's SYNCHRONOUS
+   * code runs, so a user-initiated request can never interleave into the scope and get
+   * mis-marked.
+   */
+  private static backgroundDepth = 0;
+
+  /**
+   * Run `fn` as BACKGROUND work: every service request ISSUED during its synchronous execution
+   * carries {@link BACKGROUND_REQUEST_HEADER}. Wrap the body of the timer/reconnect callback —
+   * the source of periodicity — not each call site inside it.
+   *
+   * The scope is deliberately synchronous: it ends when `fn` returns, NOT when a promise it
+   * returns settles, so issue the request in the callback's synchronous prologue. Calling a
+   * service method counts — the marker is sampled at {@link send} entry (before any await), so
+   * a debounced or retried send stays marked even though its fetch runs later.
+   */
+  static markBackground<T>(fn: () => T): T {
+    ServiceClient.backgroundDepth++;
+    try {
+      return fn();
+    } finally {
+      ServiceClient.backgroundDepth--;
+    }
+  }
 
   /**
    * Ambient client-context headers attached to every service request this client sends.
@@ -39,6 +76,9 @@ export class ServiceClient {
   ) {}
 
   async send(...args: any[]): Promise<any> {
+    // Sampled at call time, before any await: the markBackground scope is synchronous, and a
+    // debounced/retried send must keep the marking of the moment it was issued.
+    const background = ServiceClient.backgroundDepth > 0;
     const sendRequest = async () => {
       const serializedArgs = Serializer.serialize(args);
       const requestNumber = ServiceClient.requestCounter;
@@ -46,7 +86,7 @@ export class ServiceClient {
       console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
       console.log(args);
       console.groupEnd();
-      const serializedReturn = await this._send(this.servicePath, serializedArgs);
+      const serializedReturn = await this._send(this.servicePath, serializedArgs, background);
       const deserializedReturn = Serializer.deserialize(serializedReturn);
       console.groupCollapsed(
         `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
@@ -80,7 +120,7 @@ export class ServiceClient {
     }
   }
 
-  private async _send(absoluteUrl: string, serializedArgs: string) {
+  private async _send(absoluteUrl: string, serializedArgs: string, background: boolean) {
     const request = new Request(absoluteUrl, {
       method: 'POST',
       body: serializedArgs,
@@ -89,6 +129,7 @@ export class ServiceClient {
       headers: {
         // Provider-supplied client-context headers first so reserved headers always win.
         ...(ServiceClient.defaultHeadersProvider ? ServiceClient.defaultHeadersProvider() : {}),
+        ...(background ? { [BACKGROUND_REQUEST_HEADER]: '1' } : {}),
         'Content-Type': 'application/json',
       },
     });
