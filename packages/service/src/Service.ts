@@ -41,6 +41,13 @@ export interface Service extends Loadable {
       /** The user must be logged in and have these roles to call this service. If blank, defaults to requiring the 'admin' role. */
       roles?: string[];
       /**
+       * The user must hold this abstract permission slug, resolved to roles at runtime through
+       * the consumer app's `PermissionRolesMapping` (see `UserAuth.hasPermission`). Generic
+       * services declare permissions; only the consumer names roles. Takes precedence over
+       * `roles` when both are set. Admin passes every permission (break-glass).
+       */
+      permission?: string;
+      /**
        * Custom auth function. If provided, all other auth properties are ignored.
        * @param methodName the name of the service method to be executed
        * @param args the args[] that will be passed into the method

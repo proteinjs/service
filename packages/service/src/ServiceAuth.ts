@@ -16,6 +16,10 @@ export class ServiceAuth {
       return UserAuth.isLoggedIn();
     }
 
+    if (service.serviceMetadata?.auth?.permission) {
+      return UserAuth.hasPermission(service.serviceMetadata.auth.permission);
+    }
+
     if (!service.serviceMetadata?.auth?.roles) {
       return UserAuth.hasRole('admin');
     }
