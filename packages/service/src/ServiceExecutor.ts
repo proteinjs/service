@@ -43,7 +43,18 @@ export class ServiceExecutor {
     let _return: any;
     try {
       if (this.doNotAwait()) {
-        method(...deserializedArgs);
+        // Fire-and-forget: the client gets its response immediately and nobody ever awaits this
+        // promise, so the executor terminally owns its rejections — unobserved, they are unhandled
+        // promise rejections and node kills the server process. Log with method identity and drop.
+        // Synchronous throws happen before the dispatch detaches and still propagate to the catch
+        // below (ServiceError -> 400).
+        Promise.resolve(method(...deserializedArgs)).catch((error: any) => {
+          this.logger.error({
+            message: `Failed (doNotAwait, after the client response)`,
+            error,
+            obj: { functionName: this.serviceMethodName, args: deserializedArgs },
+          });
+        });
       } else {
         _return = await method(...deserializedArgs);
       }
