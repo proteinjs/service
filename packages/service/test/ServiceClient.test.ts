@@ -1,6 +1,6 @@
 import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
-import { BACKGROUND_REQUEST_HEADER, ServiceClient } from '../src/ServiceClient';
+import { ServiceClient } from '../src/ServiceClient';
 
 // Node's Request rejects the relative service paths a browser resolves against the page origin
 beforeAll(() => {
@@ -59,50 +59,5 @@ describe('ServiceClient error parsing', () => {
     stubFetch({ status: 200, statusText: 'OK', body: { serializedReturn: Serializer.serialize('ok') } });
 
     await expect(createClient().send()).resolves.toBe('ok');
-  });
-});
-
-/**
- * The background-request marker (ONE owner of the header, here in the client fetch layer):
- * requests issued inside a `markBackground` scope carry BACKGROUND_REQUEST_HEADER so server-side
- * dev tooling (the serve-package request-activity hold) can tell timer-driven chatter from real
- * user activity. The scope is synchronous by design — sampled at send() entry.
- */
-describe('ServiceClient background request marking', () => {
-  const sentHeaders = (callIndex = 0) =>
-    ((global.fetch as jest.Mock).mock.calls[callIndex][0] as { init: { headers: Record<string, string> } }).init
-      .headers;
-
-  beforeEach(() => {
-    stubFetch({ status: 200, statusText: 'OK', body: { serializedReturn: Serializer.serialize('ok') } });
-  });
-
-  it('a send issued inside markBackground carries the marker; one outside does not', async () => {
-    await ServiceClient.markBackground(() => createClient().send());
-    expect(sentHeaders(0)[BACKGROUND_REQUEST_HEADER]).toBe('1');
-
-    await createClient().send();
-    expect(sentHeaders(1)[BACKGROUND_REQUEST_HEADER]).toBeUndefined();
-  });
-
-  it('the scope ends when the callback returns — later sends are unmarked even while a marked one is in flight', async () => {
-    let marked: Promise<any> | undefined;
-    ServiceClient.markBackground(() => {
-      marked = createClient().send();
-    });
-    const unmarked = createClient().send();
-    await Promise.all([marked, unmarked]);
-    expect(sentHeaders(0)[BACKGROUND_REQUEST_HEADER]).toBe('1');
-    expect(sentHeaders(1)[BACKGROUND_REQUEST_HEADER]).toBeUndefined();
-  });
-
-  it('the scope is released when the callback throws', async () => {
-    expect(() =>
-      ServiceClient.markBackground(() => {
-        throw new Error('tick failed');
-      })
-    ).toThrow('tick failed');
-    await createClient().send();
-    expect(sentHeaders(0)[BACKGROUND_REQUEST_HEADER]).toBeUndefined();
   });
 });

@@ -6,7 +6,5 @@ export * from './src/Service';
 // outside a service method body (e.g. @proteinjs/db TableServiceAuth) and want the same pass-through.
 export { ServiceError } from './src/ServiceExecutor';
 // ServiceClient is the one HTTP transport every service call flows through; exported for the
-// app-level owner of ambient client-context headers (see setDefaultHeadersProvider) and for
-// timer/reconnect callbacks that mark their requests as background (markBackground). The header
-// constant is exported for the server-side readers of the marker.
-export { BACKGROUND_REQUEST_HEADER, ServiceClient, ServiceRequestHeadersProvider } from './src/ServiceClient';
+// app-level owner of ambient client-context headers (see setDefaultHeadersProvider).
+export { ServiceClient, ServiceRequestHeadersProvider } from './src/ServiceClient';
