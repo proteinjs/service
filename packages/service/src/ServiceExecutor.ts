@@ -33,9 +33,7 @@ export class ServiceExecutor {
   async execute(requestBody: any): Promise<any> {
     const method = this.service[this.method.name].bind(this.service);
     const deserializedArgs = Serializer.deserialize(requestBody);
-    if (this.shouldLogArgsAndReturn()) {
-      this.logger.info({ message: `Calling`, obj: { functionName: this.serviceMethodName, args: deserializedArgs } });
-    }
+    this.logger.info({ message: `Calling`, obj: this.callLogContext(deserializedArgs) });
     if (!ServiceAuth.canRunService(this.service, this.method, deserializedArgs)) {
       throw new ServiceError(`User not authorized to run service: ${this._interface.name}.${this.method.name}`);
     }
@@ -52,7 +50,7 @@ export class ServiceExecutor {
           this.logger.error({
             message: `Failed (doNotAwait, after the client response)`,
             error,
-            obj: { functionName: this.serviceMethodName, args: deserializedArgs },
+            obj: this.callLogContext(deserializedArgs),
           });
         });
       } else {
@@ -62,7 +60,7 @@ export class ServiceExecutor {
       this.logger.error({
         message: `Failed`,
         error,
-        obj: { functionName: this.serviceMethodName, args: deserializedArgs },
+        obj: this.callLogContext(deserializedArgs),
       });
       // Services throw plain-words errors deliberately; the message is the user-facing contract.
       // The stack stays server-side (logged above).
@@ -70,19 +68,20 @@ export class ServiceExecutor {
     }
 
     if (isVoidReturnType(this.method)) {
-      if (this.shouldLogArgsAndReturn()) {
-        this.logger.info({
-          message: `Returning (void)`,
-          obj: { functionName: this.serviceMethodName, return: 'void' },
-        });
-      }
+      this.logger.info({
+        message: `Returning (void)`,
+        obj: { functionName: this.serviceMethodName, return: 'void' },
+      });
       return undefined;
     }
 
     const serializedReturn = Serializer.serialize(_return);
-    if (this.shouldLogArgsAndReturn()) {
-      this.logger.info({ message: `Returning`, obj: { functionName: this.serviceMethodName, return: _return } });
-    }
+    this.logger.info({
+      message: `Returning`,
+      obj: this.shouldLogArgsAndReturn()
+        ? { functionName: this.serviceMethodName, return: _return }
+        : { functionName: this.serviceMethodName },
+    });
     return serializedReturn;
   }
 
@@ -99,7 +98,20 @@ export class ServiceExecutor {
     return false;
   }
 
+  /**
+   * Log context for a call-shaped entry (Calling / Failed). Args ride along only when verbose
+   * logging is on: service args and returns are user content (chat/thought text joined to user
+   * identity), and in prod they must never reach Cloud Logging — prod entries carry the
+   * metadata envelope (method identity, and the error on failures) only.
+   */
+  private callLogContext(deserializedArgs: any[]) {
+    return this.shouldLogArgsAndReturn()
+      ? { functionName: this.serviceMethodName, args: deserializedArgs }
+      : { functionName: this.serviceMethodName };
+  }
+
+  /** Verbose args/return logging is dev-only, unless DETAILED_SERVICE_LOGS is explicitly set. */
   private shouldLogArgsAndReturn() {
-    return !EnvInfo.isDev() || process.env.DETAILED_SERVICE_LOGS;
+    return EnvInfo.isDev() || !!process.env.DETAILED_SERVICE_LOGS;
   }
 }
