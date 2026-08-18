@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.5.3](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.2...@proteinjs/service@1.5.3) (2026-08-18)
+
+
+### Bug Fixes
+
+* prod service logs leaked user content — verbose args/return logging is now dev-only ([0fc5f16](https://github.com/proteinjs/service/commit/0fc5f16b0a147b7cc6718c6a0a20b04310076f60))
+
+
+
+
+
 ## [1.5.2](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.1...@proteinjs/service@1.5.2) (2026-08-13)
 
 **Note:** Version bump only for package @proteinjs/service
