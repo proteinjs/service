@@ -1,10 +1,10 @@
+import { randomBytes } from 'crypto';
 import { Interface, Method } from '@proteinjs/reflection';
 import { Service } from './Service';
 import { Logger } from '@proteinjs/logger';
 import { Serializer } from '@proteinjs/serializer';
 import { ServiceAuth } from './ServiceAuth';
 import { isVoidReturnType } from './isVoidReturnType';
-import { EnvInfo } from '@proteinjs/server-api';
 
 /**
  * An error whose message is safe to send to the client verbatim. ServiceRouter puts it in the
@@ -17,6 +17,13 @@ export class ServiceError extends Error {
   }
 }
 
+/**
+ * Log shape contract: service args and returns are user content (chat/thought text joined to
+ * user identity), and info level is what ships to Cloud Logging — so info entries carry the
+ * summary envelope only (method identity, requestId, durationMs, and payload SHAPES: types,
+ * counts, byte sizes). Full arg/return dumps live at debug (`LOG_LEVEL=debug` to turn on),
+ * correlated to their info entries by requestId. No env flag re-routes payload contents to info.
+ */
 export class ServiceExecutor {
   private logger: Logger;
   public deserializedArgs: any;
@@ -33,7 +40,16 @@ export class ServiceExecutor {
   async execute(requestBody: any): Promise<any> {
     const method = this.service[this.method.name].bind(this.service);
     const deserializedArgs = Serializer.deserialize(requestBody);
-    this.logger.info({ message: `Calling`, obj: this.callLogContext(deserializedArgs) });
+    const requestId = randomBytes(4).toString('hex');
+    const startTime = Date.now();
+    this.logger.info({
+      message: `Calling`,
+      obj: { functionName: this.serviceMethodName, requestId, args: this.describeArgs(deserializedArgs) },
+    });
+    this.logger.debug({
+      message: `Calling (args)`,
+      obj: { functionName: this.serviceMethodName, requestId, args: deserializedArgs },
+    });
     if (!ServiceAuth.canRunService(this.service, this.method, deserializedArgs)) {
       throw new ServiceError(`User not authorized to run service: ${this._interface.name}.${this.method.name}`);
     }
@@ -50,7 +66,7 @@ export class ServiceExecutor {
           this.logger.error({
             message: `Failed (doNotAwait, after the client response)`,
             error,
-            obj: this.callLogContext(deserializedArgs),
+            obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime },
           });
         });
       } else {
@@ -60,7 +76,7 @@ export class ServiceExecutor {
       this.logger.error({
         message: `Failed`,
         error,
-        obj: this.callLogContext(deserializedArgs),
+        obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime },
       });
       // Services throw plain-words errors deliberately; the message is the user-facing contract.
       // The stack stays server-side (logged above).
@@ -70,7 +86,7 @@ export class ServiceExecutor {
     if (isVoidReturnType(this.method)) {
       this.logger.info({
         message: `Returning (void)`,
-        obj: { functionName: this.serviceMethodName, return: 'void' },
+        obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime, return: 'void' },
       });
       return undefined;
     }
@@ -78,9 +94,16 @@ export class ServiceExecutor {
     const serializedReturn = Serializer.serialize(_return);
     this.logger.info({
       message: `Returning`,
-      obj: this.shouldLogArgsAndReturn()
-        ? { functionName: this.serviceMethodName, return: _return }
-        : { functionName: this.serviceMethodName },
+      obj: {
+        functionName: this.serviceMethodName,
+        requestId,
+        durationMs: Date.now() - startTime,
+        return: this.describeValue(_return),
+      },
+    });
+    this.logger.debug({
+      message: `Returning (value)`,
+      obj: { functionName: this.serviceMethodName, requestId, return: _return },
     });
     return serializedReturn;
   }
@@ -98,20 +121,48 @@ export class ServiceExecutor {
     return false;
   }
 
-  /**
-   * Log context for a call-shaped entry (Calling / Failed). Args ride along only when verbose
-   * logging is on: service args and returns are user content (chat/thought text joined to user
-   * identity), and in prod they must never reach Cloud Logging — prod entries carry the
-   * metadata envelope (method identity, and the error on failures) only.
-   */
-  private callLogContext(deserializedArgs: any[]) {
-    return this.shouldLogArgsAndReturn()
-      ? { functionName: this.serviceMethodName, args: deserializedArgs }
-      : { functionName: this.serviceMethodName };
+  /** One shape summary per argument. */
+  private describeArgs(args: any[]): string[] {
+    return args.map((arg) => this.describeValue(arg));
   }
 
-  /** Verbose args/return logging is dev-only, unless DETAILED_SERVICE_LOGS is explicitly set. */
-  private shouldLogArgsAndReturn() {
-    return EnvInfo.isDev() || !!process.env.DETAILED_SERVICE_LOGS;
+  /**
+   * A payload-free shape description: type, element/key counts, and serialized byte size.
+   * Never values, key names, or any other content — these summaries are all that may reach
+   * info-level logs.
+   */
+  private describeValue(value: any): string {
+    if (value === null) {
+      return 'null';
+    }
+
+    if (value === undefined) {
+      return 'undefined';
+    }
+
+    if (Array.isArray(value)) {
+      return `Array(${value.length} items, ${this.byteSize(value)})`;
+    }
+
+    if (typeof value === 'string') {
+      return `string(${Buffer.byteLength(value, 'utf8')}B)`;
+    }
+
+    if (typeof value === 'object') {
+      const className = value.constructor?.name ?? 'Object';
+      return `${className}(${Object.keys(value).length} keys, ${this.byteSize(value)})`;
+    }
+
+    // number, boolean, bigint, function, symbol: the type alone — a value can be user content.
+    return typeof value;
+  }
+
+  private byteSize(value: any): string {
+    try {
+      return `${Buffer.byteLength(JSON.stringify(value) ?? '', 'utf8')}B`;
+    } catch {
+      // Circular or otherwise unserializable — the size is not worth a throw.
+      return '?B';
+    }
   }
 }

@@ -1,8 +1,3 @@
-// EnvInfo.isDev() requires a GlobalDataStorage implementation that only exists in a running app
-jest.mock('@proteinjs/server-api', () => ({
-  EnvInfo: { isDev: () => true },
-}));
-
 import { Interface, Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Logger, Log, DefaultLogWriter } from '@proteinjs/logger';
