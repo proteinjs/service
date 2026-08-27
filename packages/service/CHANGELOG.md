@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.5.4](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.3...@proteinjs/service@1.5.4) (2026-08-27)
+
+
+### Bug Fixes
+
+* **service:** info-level service logs are summaries, full payloads move to debug — the log-shape fix ([d2b3e79](https://github.com/proteinjs/service/commit/d2b3e79ad731497109507c8f7c253633cfad6221))
+
+
+
+
+
 ## [1.5.3](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.2...@proteinjs/service@1.5.3) (2026-08-18)
 
 
