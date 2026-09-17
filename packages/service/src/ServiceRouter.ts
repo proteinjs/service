@@ -42,7 +42,10 @@ export class ServiceRouter implements Route {
     const serviceExecutor = this.getServiceExecutorMap()[request.path];
     if (!serviceExecutor) {
       const error = `Unable to find service matching path: ${request.path}`;
-      this.logger.error({ message: error });
+      // The path and the status answered ride the line: read beside the request's own facts (the
+      // caller's declared build against the server's), a rollout, a stale client and a door that
+      // never landed each tell themselves apart.
+      this.logger.error({ message: error, obj: { path: request.path, status: 404 } });
       response.status(404).send({ error });
       return;
     }

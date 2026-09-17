@@ -1,0 +1,6 @@
+{
+  "branch": "fix/error-report-evidence-contract",
+  "packages": ["service"],
+  "suites": ["packages/service/test/ServiceRouter.test.ts"],
+  "removes": []
+}
