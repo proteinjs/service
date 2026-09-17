@@ -1,0 +1,6 @@
+{
+  "branch": "fix/expected-service-outcome",
+  "packages": ["service"],
+  "suites": ["packages/service/test/ServiceExecutorLogging.test.ts", "packages/service/test/ServiceExecutor.test.ts"],
+  "removes": []
+}
