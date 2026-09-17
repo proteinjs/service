@@ -2,6 +2,7 @@ import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Debouncer } from '@proteinjs/util';
 import { isVoidReturnType } from './isVoidReturnType';
+import { ClientBuildVersion } from './ClientBuildVersion';
 
 /** See {@link ServiceClient.setDefaultHeadersProvider}. */
 export type ServiceRequestHeadersProvider = () => { [headerName: string]: string };
@@ -23,7 +24,8 @@ export class ServiceClient {
    *
    * ONE slot by design: there is one owner of client-context headers per app (the module that
    * owns the client's ambient identity — e.g. @n3xah/util-common's OriginSocketContext).
-   * Reserved headers (Content-Type) always win over provider-supplied ones.
+   * Reserved headers (Content-Type, and the client build version — see ClientBuildVersion)
+   * always win over provider-supplied ones.
    */
   private static defaultHeadersProvider: ServiceRequestHeadersProvider | undefined;
 
@@ -89,6 +91,7 @@ export class ServiceClient {
       headers: {
         // Provider-supplied client-context headers first so reserved headers always win.
         ...(ServiceClient.defaultHeadersProvider ? ServiceClient.defaultHeadersProvider() : {}),
+        ...ClientBuildVersion.headers(),
         'Content-Type': 'application/json',
       },
     });

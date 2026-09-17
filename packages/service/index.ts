@@ -8,3 +8,8 @@ export { ServiceError } from './src/ServiceExecutor';
 // ServiceClient is the one HTTP transport every service call flows through; exported for the
 // app-level owner of ambient client-context headers (see setDefaultHeadersProvider).
 export { ServiceClient, ServiceRequestHeadersProvider } from './src/ServiceClient';
+// The two halves of the build-version comparison ServiceRouter makes on an unknown service path:
+// the client installs its build version once (ClientBuildVersion.set; every request then carries
+// the header), the server declares its own by implementing ServerBuildVersion.
+export { ClientBuildVersion, CLIENT_BUILD_VERSION_HEADER } from './src/ClientBuildVersion';
+export * from './src/ServerBuildVersion';
