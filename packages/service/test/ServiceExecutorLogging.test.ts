@@ -12,13 +12,17 @@
  *  2. Full arg/return dumps live at debug, correlated to their info entries by requestId.
  *  3. Failure paths (awaited and doNotAwait-detached) log error entries with the envelope and
  *     the error — no payloads.
+ *  4. An expected outcome (ExpectedServiceOutcome: gone, not shared, already done) is a refusal
+ *     the service designed for, not a failure: it logs ONE warn entry with the envelope and the
+ *     outcome's message, no stack and no error entry, and still crosses the wire as a
+ *     ServiceError with the same message.
  */
 
 import { Interface, Method, TypeAliasDeclaration } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Logger, Log, DefaultLogWriter } from '@proteinjs/logger';
 import { Service } from '../src/Service';
-import { ServiceExecutor } from '../src/ServiceExecutor';
+import { ExpectedServiceOutcome, ServiceError, ServiceExecutor } from '../src/ServiceExecutor';
 
 type ExecutorInternals = {
   logger: Logger;
@@ -196,5 +200,72 @@ describe('failure paths: envelope + error, no payloads', () => {
     const entries = await runFailingCall('debug');
     expect(textAtLevel(entries, 'debug')).toContain(SECRET_ARG);
     expect(textAtLevel(entries, 'info')).not.toContain(SECRET_ARG);
+  });
+});
+
+describe('expected outcomes: one warn entry with the envelope, no error entry, the message still crosses', () => {
+  const OUTCOME = 'Nothing here is shared with you';
+
+  /** Run a call whose service reports an expected outcome, and capture every log entry. */
+  const runRefusedCall = async (outcome: Error, doNotAwait = false) => {
+    const service = {
+      serviceMetadata: { auth: { public: true }, doNotAwait },
+      doThing: async (_message: string) => {
+        throw outcome;
+      },
+    } as unknown as Service;
+    const { executor, entries } = createExecutor(service, 'doThing');
+    const call = executor.execute(Serializer.serialize([SECRET_ARG]));
+    if (doNotAwait) {
+      await call;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+    } else {
+      await expect(call).rejects.toThrow(new ServiceError(outcome.message));
+    }
+    return entries;
+  };
+
+  it('logs the refusal at warn with the envelope and the outcome, never at error, never a stack', async () => {
+    const entries = await runRefusedCall(new ExpectedServiceOutcome(OUTCOME));
+    expect(entries.filter((entry) => entry.logLevel === 'error')).toEqual([]);
+    const refused = entries.filter((entry) => entry.logLevel === 'warn');
+    expect(refused).toHaveLength(1);
+    expect(refused[0].message).toBe('Refused');
+    expect(refused[0].obj?.functionName).toBe('TestService.doThing');
+    expect(refused[0].obj?.requestId).toMatch(/^[0-9a-f]{8}$/);
+    expect(typeof refused[0].obj?.durationMs).toBe('number');
+    expect(refused[0].obj?.outcome).toBe(OUTCOME);
+    expect(refused[0].error).toBeUndefined();
+    expect(entryText(refused[0])).not.toContain(SECRET_ARG);
+  });
+
+  it('recognizes a subclass by its name tag, not its prototype', async () => {
+    class NotShared extends ExpectedServiceOutcome {
+      constructor() {
+        super(OUTCOME);
+      }
+    }
+    const entries = await runRefusedCall(new NotShared());
+    expect(entries.filter((entry) => entry.logLevel === 'error')).toEqual([]);
+    expect(entries.filter((entry) => entry.logLevel === 'warn').map((entry) => entry.obj?.outcome)).toEqual([OUTCOME]);
+  });
+
+  it('a detached (doNotAwait) expected outcome is a warn entry too, marked as after the response', async () => {
+    const entries = await runRefusedCall(new ExpectedServiceOutcome(OUTCOME), true);
+    expect(entries.filter((entry) => entry.logLevel === 'error')).toEqual([]);
+    const refused = entries.filter((entry) => entry.logLevel === 'warn');
+    expect(refused).toHaveLength(1);
+    expect(refused[0].message).toBe('Refused (doNotAwait, after the client response)');
+    expect(refused[0].obj?.outcome).toBe(OUTCOME);
+  });
+
+  it('a plain Error is still a failure: an error entry with the stack, no warn entry', async () => {
+    const entries = await runFailingCall();
+    expect(entries.filter((entry) => entry.logLevel === 'warn')).toEqual([]);
+    const failed = entries.filter((entry) => entry.logLevel === 'error');
+    expect(failed).toHaveLength(1);
+    expect(failed[0].message).toBe('Failed');
+    expect(failed[0].error?.message).toBe('service failed');
   });
 });

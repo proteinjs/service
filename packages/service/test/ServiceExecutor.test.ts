@@ -2,7 +2,7 @@ import { Interface, Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Logger, Log, DefaultLogWriter } from '@proteinjs/logger';
 import { Service } from '../src/Service';
-import { ServiceError, ServiceExecutor } from '../src/ServiceExecutor';
+import { ExpectedServiceOutcome, ServiceError, ServiceExecutor } from '../src/ServiceExecutor';
 import { ServiceRouter } from '../src/ServiceRouter';
 
 type RouterInternals = {
@@ -58,6 +58,25 @@ describe('service error transport', () => {
 
     expect(sent.status).toBe(400);
     expect(sent.body).toEqual({ error: 'Release blocked: workspace has uncommitted changes' });
+  });
+
+  it('sends an expected outcome to the client as a 400 carrying its message, like any service error', async () => {
+    const service = {
+      serviceMetadata: { auth: { public: true } },
+      doThing: async () => {
+        throw new ExpectedServiceOutcome('Nothing here is shared with you');
+      },
+    } as unknown as Service;
+    const router = createRouter('/service/@test/test/TestService/doThing', createExecutor(service, 'doThing'));
+    const { response, sent } = createResponse();
+
+    await router.onRequest(
+      { path: '/service/@test/test/TestService/doThing', body: Serializer.serialize([]) },
+      response
+    );
+
+    expect(sent.status).toBe(400);
+    expect(sent.body).toEqual({ error: 'Nothing here is shared with you' });
   });
 
   it('preserves non-Error throws as their string form', async () => {

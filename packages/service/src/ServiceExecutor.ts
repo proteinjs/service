@@ -18,6 +18,28 @@ export class ServiceError extends Error {
 }
 
 /**
+ * A designed outcome of a service call that the service reports by throwing: the record is gone
+ * or not shared with the caller, the action was already taken, the request is declined in the
+ * caller's own words. The client renders it and nothing is broken — so it is not an error report.
+ * Throw it (or a subclass) from a service method: ServiceExecutor writes the refusal at warn with
+ * its usual envelope and the outcome's message, never a stack, and rethrows it as a ServiceError so
+ * the message crosses the wire exactly like any other service throw. A plain Error stays a failure
+ * and keeps its error entry with the stack.
+ *
+ * Recognized by name, never by prototype (an Error subclass does not keep its prototype chain
+ * across every compile target and bundler): a subclass must leave the name as it is.
+ */
+export class ExpectedServiceOutcome extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExpectedServiceOutcome';
+  }
+}
+
+export const isExpectedServiceOutcome = (error: unknown): error is ExpectedServiceOutcome =>
+  typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'ExpectedServiceOutcome';
+
+/**
  * Log shape contract: service args and returns are user content (chat/thought text joined to
  * user identity), and info level is what ships to Cloud Logging — so info entries carry the
  * summary envelope only (method identity, requestId, durationMs, and payload SHAPES: types,
@@ -63,21 +85,13 @@ export class ServiceExecutor {
         // Synchronous throws happen before the dispatch detaches and still propagate to the catch
         // below (ServiceError -> 400).
         Promise.resolve(method(...deserializedArgs)).catch((error: any) => {
-          this.logger.error({
-            message: `Failed (doNotAwait, after the client response)`,
-            error,
-            obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime },
-          });
+          this.logFailure(error, requestId, startTime, ' (doNotAwait, after the client response)');
         });
       } else {
         _return = await method(...deserializedArgs);
       }
     } catch (error: any) {
-      this.logger.error({
-        message: `Failed`,
-        error,
-        obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime },
-      });
+      this.logFailure(error, requestId, startTime);
       // Services throw plain-words errors deliberately; the message is the user-facing contract.
       // The stack stays server-side (logged above).
       throw new ServiceError(error instanceof Error ? error.message : String(error));
@@ -119,6 +133,22 @@ export class ServiceExecutor {
     }
 
     return false;
+  }
+
+  /**
+   * The log entry for a throw out of the service method. An expected outcome (see
+   * {@link ExpectedServiceOutcome}) is a refusal the service designed for — it is written at warn
+   * with the envelope and the outcome's message, never a stack: an error entry reports something
+   * broken, and nothing is. Anything else is a failure and keeps its error entry with the stack.
+   */
+  private logFailure(error: any, requestId: string, startTime: number, suffix = '') {
+    const obj = { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime };
+    if (isExpectedServiceOutcome(error)) {
+      this.logger.warn({ message: `Refused${suffix}`, obj: { ...obj, outcome: error.message } });
+      return;
+    }
+
+    this.logger.error({ message: `Failed${suffix}`, error, obj });
   }
 
   /** One shape summary per argument. */
