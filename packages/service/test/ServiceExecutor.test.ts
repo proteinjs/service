@@ -2,7 +2,7 @@ import { Interface, Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Logger, Log, DefaultLogWriter } from '@proteinjs/logger';
 import { Service } from '../src/Service';
-import { ServiceError, ServiceExecutor } from '../src/ServiceExecutor';
+import { ServiceError, ServiceExecutor, ServiceRefusal } from '../src/ServiceExecutor';
 import { ServiceRouter } from '../src/ServiceRouter';
 
 type RouterInternals = {
@@ -70,6 +70,59 @@ describe('service error transport', () => {
     const executor = createExecutor(service, 'doThing');
 
     await expect(executor.execute(Serializer.serialize([]))).rejects.toThrow(new ServiceError('plain string refusal'));
+  });
+
+  it('answers a refusal with its own status and the message on the wire', async () => {
+    const service = {
+      serviceMetadata: { auth: { public: true } },
+      doThing: async () => {
+        throw new ServiceRefusal('No such record: r-1', 404);
+      },
+    } as unknown as Service;
+    const router = createRouter('/service/@test/test/TestService/doThing', createExecutor(service, 'doThing'));
+    const { response, sent } = createResponse();
+
+    await router.onRequest(
+      { path: '/service/@test/test/TestService/doThing', body: Serializer.serialize([]) },
+      response
+    );
+
+    expect(sent.status).toBe(404);
+    expect(sent.body).toEqual({ error: 'No such record: r-1' });
+  });
+
+  it('answers a refusal that names no status as a 400', async () => {
+    const service = {
+      serviceMetadata: { auth: { public: true } },
+      doThing: async () => {
+        throw new ServiceRefusal('That name is taken');
+      },
+    } as unknown as Service;
+    const router = createRouter('/service/@test/test/TestService/doThing', createExecutor(service, 'doThing'));
+    const { response, sent } = createResponse();
+
+    await router.onRequest(
+      { path: '/service/@test/test/TestService/doThing', body: Serializer.serialize([]) },
+      response
+    );
+
+    expect(sent.status).toBe(400);
+    expect(sent.body).toEqual({ error: 'That name is taken' });
+  });
+
+  it('rejects execute with a ServiceError that carries the refusal status', async () => {
+    const service = {
+      serviceMetadata: { auth: { public: true } },
+      doThing: async () => {
+        throw new ServiceRefusal('No such record: r-1', 404);
+      },
+    } as unknown as Service;
+    const executor = createExecutor(service, 'doThing');
+
+    const error = await executor.execute(Serializer.serialize([])).catch((e: unknown) => e as ServiceError);
+    expect(error.name).toBe('ServiceError');
+    expect(error.message).toBe('No such record: r-1');
+    expect(error.status).toBe(404);
   });
 
   it('sends the authorization refusal message to the client', async () => {

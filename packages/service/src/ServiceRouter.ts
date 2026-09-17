@@ -52,8 +52,10 @@ export class ServiceRouter implements Route {
       response.send({ serializedReturn });
     } catch (error: any) {
       if (isServiceError(error)) {
-        // ServiceExecutor wraps service-thrown errors in ServiceError; the message crosses the wire.
-        response.status(400).send({ error: error.message });
+        // ServiceExecutor wraps service-thrown errors in ServiceError; the message crosses the wire
+        // with the error's status. A ServiceError minted by another copy of this package (a consumer
+        // graph resolving two versions) may predate `status` and answers as it always has: 400.
+        response.status(typeof error.status === 'number' ? error.status : 400).send({ error: error.message });
         return;
       }
 

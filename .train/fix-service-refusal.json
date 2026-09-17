@@ -1,0 +1,6 @@
+{
+  "branch": "fix/service-refusal",
+  "packages": ["service"],
+  "suites": ["packages/service/test/ServiceExecutor.test.ts", "packages/service/test/ServiceExecutorLogging.test.ts"],
+  "removes": []
+}

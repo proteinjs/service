@@ -8,14 +8,46 @@ import { isVoidReturnType } from './isVoidReturnType';
 
 /**
  * An error whose message is safe to send to the client verbatim. ServiceRouter puts it in the
- * response body; any other error type is masked as 'Internal server error'.
+ * response body with `status` (400 unless the error names another); any other error type is
+ * masked as 'Internal server error'.
  */
 export class ServiceError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly status: number = 400
+  ) {
     super(message);
     this.name = 'ServiceError';
   }
 }
+
+/** The HTTP statuses a refusal may answer with; 400 when the refusal names none. */
+export type ServiceRefusalStatus = 400 | 403 | 404 | 422;
+
+/**
+ * A service method's deliberate "no": the caller asked for something the method will not do — a
+ * record that is absent or outside their reach, an action they may not take, an argument the
+ * method rejects. The message is the answer and crosses the wire verbatim (ServiceRouter answers
+ * with `status`). Nothing failed, so ServiceExecutor logs a refusal as a warning with no stack
+ * instead of an error entry — a log pipeline that files error entries as incident reports never
+ * sees a refusal.
+ *
+ * Name-tagged rather than relying on `instanceof`: the prototype chain is unreliable across
+ * package compile targets (the same reason ServiceRouter checks `name` for ServiceError). A
+ * subclass keeps the name; its identity is its message.
+ */
+export class ServiceRefusal extends Error {
+  constructor(
+    message: string,
+    public readonly status: ServiceRefusalStatus = 400
+  ) {
+    super(message);
+    this.name = 'ServiceRefusal';
+  }
+}
+
+export const isServiceRefusal = (error: unknown): error is ServiceRefusal =>
+  !!error && typeof error === 'object' && (error as { name?: string }).name === 'ServiceRefusal';
 
 /**
  * Log shape contract: service args and returns are user content (chat/thought text joined to
@@ -62,22 +94,18 @@ export class ServiceExecutor {
         // promise rejections and node kills the server process. Log with method identity and drop.
         // Synchronous throws happen before the dispatch detaches and still propagate to the catch
         // below (ServiceError -> 400).
-        Promise.resolve(method(...deserializedArgs)).catch((error: any) => {
-          this.logger.error({
-            message: `Failed (doNotAwait, after the client response)`,
-            error,
-            obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime },
-          });
-        });
+        Promise.resolve(method(...deserializedArgs)).catch((error: any) =>
+          this.logThrow(error, requestId, startTime, true)
+        );
       } else {
         _return = await method(...deserializedArgs);
       }
     } catch (error: any) {
-      this.logger.error({
-        message: `Failed`,
-        error,
-        obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime },
-      });
+      this.logThrow(error, requestId, startTime, false);
+      if (isServiceRefusal(error)) {
+        // The refusal's own status rides to the router; the message is the answer.
+        throw new ServiceError(error.message, error.status);
+      }
       // Services throw plain-words errors deliberately; the message is the user-facing contract.
       // The stack stays server-side (logged above).
       throw new ServiceError(error instanceof Error ? error.message : String(error));
@@ -119,6 +147,21 @@ export class ServiceExecutor {
     }
 
     return false;
+  }
+
+  /**
+   * A throw from the service method, by kind: a refusal (ServiceRefusal) is the method's answer,
+   * so it is logged as a warning with the envelope and its status — no stack, and never an error
+   * entry; anything else is a failure and keeps the error entry with the error and its stack.
+   */
+  private logThrow(error: any, requestId: string, startTime: number, detached: boolean) {
+    const phase = detached ? ' (doNotAwait, after the client response)' : '';
+    const obj = { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime };
+    if (isServiceRefusal(error)) {
+      this.logger.warn({ message: `Refused${phase}: ${error.message}`, obj: { ...obj, status: error.status } });
+      return;
+    }
+    this.logger.error({ message: `Failed${phase}`, error, obj });
   }
 
   /** One shape summary per argument. */

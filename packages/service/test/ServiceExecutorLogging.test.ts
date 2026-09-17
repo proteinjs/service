@@ -12,13 +12,16 @@
  *  2. Full arg/return dumps live at debug, correlated to their info entries by requestId.
  *  3. Failure paths (awaited and doNotAwait-detached) log error entries with the envelope and
  *     the error — no payloads.
+ *  4. A refusal (`ServiceRefusal` — the method's deliberate "no") is not a failure: it logs ONE
+ *     warn entry with the envelope, the status and the refusal message, no stack, and never an
+ *     error entry — so a log pipeline that files error entries as incident reports never sees it.
  */
 
 import { Interface, Method, TypeAliasDeclaration } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Logger, Log, DefaultLogWriter } from '@proteinjs/logger';
 import { Service } from '../src/Service';
-import { ServiceExecutor } from '../src/ServiceExecutor';
+import { ServiceExecutor, ServiceRefusal } from '../src/ServiceExecutor';
 
 type ExecutorInternals = {
   logger: Logger;
@@ -87,6 +90,36 @@ const runDetachedFailingCall = async () => {
   await executor.execute(Serializer.serialize([SECRET_ARG]));
   // The detached rejection settles after the microtask queue drains; flush macrotasks so the
   // terminal catch has written its log entry.
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  return entries;
+};
+
+/** Run a call the service REFUSES (a ServiceRefusal, optionally with its own status) and capture every log entry. */
+const runRefusedCall = async (status?: 404) => {
+  const service = {
+    serviceMetadata: { auth: { public: true } },
+    doThing: async (_message: string, _row: { email: string }) => {
+      throw new ServiceRefusal('no such record: r-7d1f', status);
+    },
+  } as unknown as Service;
+  const { executor, entries } = createExecutor(service, 'doThing');
+  await expect(
+    executor.execute(Serializer.serialize([SECRET_ARG, { email: SECRET_EMAIL, body: SECRET_ARG }]))
+  ).rejects.toThrow('no such record: r-7d1f');
+  return entries;
+};
+
+/** Run a doNotAwait call whose detached promise rejects with a refusal, and capture every log entry. */
+const runDetachedRefusedCall = async () => {
+  const service = {
+    serviceMetadata: { auth: { public: true }, doNotAwait: true },
+    doThing: async (_message: string) => {
+      throw new ServiceRefusal('not yours: r-7d1f', 403);
+    },
+  } as unknown as Service;
+  const { executor, entries } = createExecutor(service, 'doThing');
+  await executor.execute(Serializer.serialize([SECRET_ARG]));
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   return entries;
@@ -196,5 +229,52 @@ describe('failure paths: envelope + error, no payloads', () => {
     const entries = await runFailingCall('debug');
     expect(textAtLevel(entries, 'debug')).toContain(SECRET_ARG);
     expect(textAtLevel(entries, 'info')).not.toContain(SECRET_ARG);
+  });
+});
+
+describe('refusals: one warn entry with the envelope, never an error entry', () => {
+  it('a refusal writes one warn entry — envelope, status, the refusal — and no error entry', async () => {
+    const entries = await runRefusedCall(404);
+    expect(entries.filter((e) => e.logLevel === 'error')).toEqual([]);
+    const warnings = entries.filter((e) => e.logLevel === 'warn');
+    expect(warnings).toHaveLength(1);
+    const [refused] = warnings;
+    expect(refused.message).toBe('Refused: no such record: r-7d1f');
+    expect(refused.obj?.functionName).toBe('TestService.doThing');
+    expect(refused.obj?.requestId).toMatch(/^[0-9a-f]{8}$/);
+    expect(typeof refused.obj?.durationMs).toBe('number');
+    expect(refused.obj?.status).toBe(404);
+  });
+
+  it('the refusal entry carries no stack and no arg contents', async () => {
+    const entries = await runRefusedCall(404);
+    const refused = entries.find((e) => e.logLevel === 'warn') as Log;
+    expect(refused.error).toBeUndefined();
+    for (const secret of SECRETS) {
+      expect(entryText(refused)).not.toContain(secret);
+    }
+  });
+
+  it('a refusal that names no status is logged as one at 400', async () => {
+    const entries = await runRefusedCall();
+    expect(entries.filter((e) => e.logLevel === 'error')).toEqual([]);
+    expect(entries.find((e) => e.logLevel === 'warn')?.obj?.status).toBe(400);
+  });
+
+  it('a plain error is still a failure: the error entry keeps its stack, and no warn entry is written', async () => {
+    const entries = await runFailingCall();
+    expect(entries.filter((e) => e.logLevel === 'warn')).toEqual([]);
+    const errorEntry = entries.find((e) => e.logLevel === 'error') as Log;
+    expect(errorEntry.error?.stack).toContain('service failed');
+  });
+
+  it('doNotAwait detached refusal: the warn entry names the phase, and no error entry is written', async () => {
+    const entries = await runDetachedRefusedCall();
+    expect(entries.filter((e) => e.logLevel === 'error')).toEqual([]);
+    const refused = entries.find((e) => e.logLevel === 'warn') as Log;
+    expect(refused.message).toBe('Refused (doNotAwait, after the client response): not yours: r-7d1f');
+    expect(refused.obj?.functionName).toBe('TestService.doThing');
+    expect(refused.obj?.status).toBe(403);
+    expect(entryText(refused)).not.toContain(SECRET_ARG);
   });
 });
