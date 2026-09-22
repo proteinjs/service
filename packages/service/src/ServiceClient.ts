@@ -6,6 +6,36 @@ import { isVoidReturnType } from './isVoidReturnType';
 /** See {@link ServiceClient.setDefaultHeadersProvider}. */
 export type ServiceRequestHeadersProvider = () => { [headerName: string]: string };
 
+/** The transport options a {@link ServiceRequestInitProvider} may set per request. */
+export type ServiceRequestInit = {
+  /**
+   * Ask the browser to keep the request alive past the page's teardown (`fetch`'s
+   * `keepalive`): a request dispatched while the page is hiding or unloading still reaches
+   * the server. Browsers cap the bytes in flight under keepalive (64 KiB in Chromium); a
+   * request the cap refuses is re-sent once without it (see {@link ServiceClient.send}).
+   */
+  keepalive?: boolean;
+};
+
+/** See {@link ServiceClient.setRequestInitProvider}. */
+export type ServiceRequestInitProvider = (request: {
+  /** The service path the request is for (`/service/<package>/<Service>/<method>`). */
+  servicePath: string;
+  /** The serialized request body's length in bytes. */
+  bodyBytes: number;
+}) => ServiceRequestInit;
+
+/**
+ * The request-init provider slot lives on the global object, not in module scope: per-package
+ * installs can put several live copies of this module in one page (a package's nested
+ * node_modules hosts its own), and a page-lifecycle owner setting the slot on one copy while
+ * the db layer's service clients dispatch through another would be a silent no-op. One slot,
+ * one page — the same anchoring reflection's SourceRepository uses.
+ */
+const REQUEST_INIT_PROVIDER_GLOBAL_KEY = '__proteinjs_service_requestInitProvider';
+
+const getGlobal = (): any => (typeof window !== 'undefined' ? window : globalThis);
+
 export class ServiceClient {
   private static requestCounter = 1;
 
@@ -29,6 +59,25 @@ export class ServiceClient {
 
   static setDefaultHeadersProvider(provider: ServiceRequestHeadersProvider | undefined): void {
     ServiceClient.defaultHeadersProvider = provider;
+  }
+
+  /**
+   * Ambient transport options for every service request this client sends — the request-init
+   * twin of {@link setDefaultHeadersProvider}. Some transport state describes the CLIENT PAGE,
+   * not the call: a page that is hiding or unloading must have every request it dispatches
+   * outlive it (`keepalive`), or the writes it queued die with it. The provider is consulted
+   * per request, at dispatch, with the service path and the body size, so an owner can decide
+   * per request (e.g. keepalive only under the browser's in-flight cap).
+   *
+   * ONE slot by design: one owner of page lifecycle per app. Reserved init fields (method,
+   * body, headers, credentials, redirect) always win over provider-supplied ones.
+   */
+  static setRequestInitProvider(provider: ServiceRequestInitProvider | undefined): void {
+    getGlobal()[REQUEST_INIT_PROVIDER_GLOBAL_KEY] = provider;
+  }
+
+  private static requestInitProvider(): ServiceRequestInitProvider | undefined {
+    return getGlobal()[REQUEST_INIT_PROVIDER_GLOBAL_KEY];
   }
 
   constructor(
@@ -81,7 +130,12 @@ export class ServiceClient {
   }
 
   private async _send(absoluteUrl: string, serializedArgs: string) {
-    const request = new Request(absoluteUrl, {
+    const provided = ServiceClient.requestInitProvider()?.({
+      servicePath: absoluteUrl,
+      bodyBytes: serializedArgs.length,
+    });
+    const init = (keepalive: boolean): RequestInit => ({
+      ...(keepalive ? { keepalive: true } : {}),
       method: 'POST',
       body: serializedArgs,
       redirect: 'follow',
@@ -92,7 +146,19 @@ export class ServiceClient {
         'Content-Type': 'application/json',
       },
     });
-    const response = await fetch(request);
+    const keepalive = provided?.keepalive === true;
+    let response: Response;
+    try {
+      response = await fetch(new Request(absoluteUrl, init(keepalive)));
+    } catch (error) {
+      // The ONE named fallback: the browser refuses a keepalive request over its in-flight cap
+      // with a TypeError before anything is sent. The request is re-sent as an ordinary one —
+      // the write is not lost to the cap. Any other failure (a network error) is the caller's.
+      if (!keepalive || !(error instanceof TypeError)) {
+        throw error;
+      }
+      response = await fetch(new Request(absoluteUrl, init(false)));
+    }
     if (response.status != 200) {
       throw new Error(await this.errorMessage(response, absoluteUrl));
     }
