@@ -132,7 +132,7 @@ export class ServiceClient {
   private async _send(absoluteUrl: string, serializedArgs: string) {
     const provided = ServiceClient.requestInitProvider()?.({
       servicePath: absoluteUrl,
-      bodyBytes: serializedArgs.length,
+      bodyBytes: ServiceClient.utf8ByteLength(serializedArgs),
     });
     const init = (keepalive: boolean): RequestInit => ({
       ...(keepalive ? { keepalive: true } : {}),
@@ -186,5 +186,30 @@ export class ServiceClient {
     }
 
     return `Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`;
+  }
+
+  /**
+   * The bytes `fetch` puts on the wire for a string body (UTF-8) — what a browser counts
+   * against its keepalive in-flight cap. A string's `length` is its UTF-16 code units, which
+   * undercounts every non-ASCII character (up to 3×). Counted here, with no environment
+   * dependency (jsdom test environments have no TextEncoder).
+   */
+  private static utf8ByteLength(text: string): number {
+    let bytes = 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code < 0x80) {
+        bytes += 1;
+      } else if (code < 0x800) {
+        bytes += 2;
+      } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+        // A surrogate pair: one 4-byte character across two code units.
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    }
+    return bytes;
   }
 }

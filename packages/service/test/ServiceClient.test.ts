@@ -85,6 +85,21 @@ describe('ServiceClient request-init provider (keepalive)', () => {
     });
   });
 
+  it('bodyBytes is the UTF-8 byte length of the body — what the browser counts against its keepalive cap — not its code-unit length', async () => {
+    stubFetch({ status: 200, statusText: 'OK', body: { serializedReturn: Serializer.serialize('ok') } });
+    const provider = jest.fn(() => ({ keepalive: false }));
+    ServiceClient.setRequestInitProvider(provider);
+    const arg = 'café — naïve 😀 日本語';
+    await createClient().send(arg);
+    const body = Serializer.serialize([arg]);
+    // The premise: this body is longer in bytes than in UTF-16 code units.
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(body.length);
+    expect(provider).toHaveBeenCalledWith({
+      servicePath: '/service/@test/test/TestService/doThing',
+      bodyBytes: Buffer.byteLength(body, 'utf8'),
+    });
+  });
+
   it('the provider never overrides the reserved init (method, body, credentials, headers)', async () => {
     stubFetch({ status: 200, statusText: 'OK', body: { serializedReturn: Serializer.serialize('ok') } });
     ServiceClient.setRequestInitProvider(() => ({ keepalive: true, method: 'GET', credentials: 'omit' }) as any);
