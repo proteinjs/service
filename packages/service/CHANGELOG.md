@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.5.6](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.5...@proteinjs/service@1.5.6) (2026-09-23)
+
+
+### Bug Fixes
+
+* ServiceClient carries per-request transport options from a one-slot provider — keepalive for a page that is hiding or unloading ([86f043c](https://github.com/proteinjs/service/commit/86f043cef3ca435a588e6855205c894721af01d1))
+* the request-init provider's bodyBytes counts the body's UTF-8 bytes, not its code units ([ac0e563](https://github.com/proteinjs/service/commit/ac0e5633c11f03f0ed28027fc769dfecf6414baf))
+
+
+
+
+
 ## [1.5.5](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.4...@proteinjs/service@1.5.5) (2026-09-13)
 
 **Note:** Version bump only for package @proteinjs/service
