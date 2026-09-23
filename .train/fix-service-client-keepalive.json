@@ -1,6 +1,0 @@
-{
-  "branch": "fix/service-client-keepalive",
-  "packages": ["service"],
-  "suites": ["packages/service/test/ServiceClient.test.ts"],
-  "removes": []
-}
