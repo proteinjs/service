@@ -29,9 +29,9 @@ const SERVICE_PATH = '/service/@test/test/TestService/readFile';
 const SECRET_ARG = 'file-id-in-args-51c2';
 
 /** A router whose one executor runs `readFile`, which throws `thrown`; every log entry the call writes is captured. */
-const routerThrowing = (thrown: unknown) => {
+const routerThrowing = (thrown: unknown, metadata: { doNotAwait?: boolean } = {}) => {
   const service = {
-    serviceMetadata: { auth: { public: true } },
+    serviceMetadata: { auth: { public: true }, ...metadata },
     readFile: async (_fileId: string) => {
       throw thrown;
     },
@@ -110,6 +110,26 @@ describe('a refusal is logged at WARN, never as a failure', () => {
     expect(warnings[0].obj?.functionName).toBe('TestService.readFile');
     expect(warnings[0].obj?.status).toBe(404);
     expect(warnings[0].obj?.requestId).toMatch(/^[0-9a-f]{8}$/);
+    for (const entry of entries) {
+      expect(entryText(entry)).not.toContain(SECRET_ARG);
+    }
+  });
+
+  it('on the fire-and-forget path too (doNotAwait): the same one WARN entry, no ERROR, no argument', async () => {
+    const { router, entries } = routerThrowing(new ServiceRefusal(404, `File ${SECRET_ARG} is not available`), {
+      doNotAwait: true,
+    });
+
+    const sent = await call(router);
+    // The client already has its answer; the refusal settles after it, and reaches no one but the log.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(sent.status ?? 200).toBe(200);
+    expect(entries.filter((entry) => entry.logLevel === 'error')).toEqual([]);
+    const warnings = entries.filter((entry) => entry.logLevel === 'warn');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].obj?.functionName).toBe('TestService.readFile');
+    expect(warnings[0].obj?.status).toBe(404);
     for (const entry of entries) {
       expect(entryText(entry)).not.toContain(SECRET_ARG);
     }

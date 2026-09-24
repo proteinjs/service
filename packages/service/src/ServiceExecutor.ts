@@ -66,6 +66,11 @@ export class ServiceExecutor {
         // Synchronous throws happen before the dispatch detaches and still propagate to the catch
         // below (ServiceError -> 400).
         Promise.resolve(method(...deserializedArgs)).catch((error: any) => {
+          if (ServiceRefusal.is(error)) {
+            // The same refusal, settled after the client's answer: the log is all it reaches.
+            this.logRefusal(error, requestId, startTime);
+            return;
+          }
           this.logger.error({
             message: `Failed (doNotAwait, after the client response)`,
             error,
@@ -77,18 +82,9 @@ export class ServiceExecutor {
       }
     } catch (error: any) {
       if (ServiceRefusal.is(error)) {
-        // A refusal the operation made on purpose, not a failure: WARN, with its status and the
-        // operation's name — never the arguments, nor the message (a refusal names what it refused,
-        // often an argument); the router answers with its status and message.
-        this.logger.warn({
-          message: `Refused`,
-          obj: {
-            functionName: this.serviceMethodName,
-            requestId,
-            status: error.status,
-            durationMs: Date.now() - startTime,
-          },
-        });
+        // A refusal the operation made on purpose, not a failure: the router answers with its
+        // status and message.
+        this.logRefusal(error, requestId, startTime);
         throw error;
       }
 
@@ -138,6 +134,23 @@ export class ServiceExecutor {
     }
 
     return false;
+  }
+
+  /**
+   * A refusal's one log entry, whichever path settled it (awaited, or detached after the client's
+   * answer): WARN, with its status and the operation's name — never the arguments, nor the message
+   * (a refusal names what it refused, often an argument).
+   */
+  private logRefusal(refusal: ServiceRefusal, requestId: string, startTime: number): void {
+    this.logger.warn({
+      message: `Refused`,
+      obj: {
+        functionName: this.serviceMethodName,
+        requestId,
+        status: refusal.status,
+        durationMs: Date.now() - startTime,
+      },
+    });
   }
 
   /** One shape summary per argument. */
