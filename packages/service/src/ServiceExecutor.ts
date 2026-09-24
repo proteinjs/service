@@ -5,6 +5,7 @@ import { Logger } from '@proteinjs/logger';
 import { Serializer } from '@proteinjs/serializer';
 import { ServiceAuth } from './ServiceAuth';
 import { isVoidReturnType } from './isVoidReturnType';
+import { ServiceRefusal } from './ServiceRefusal';
 
 /**
  * An error whose message is safe to send to the client verbatim. ServiceRouter puts it in the
@@ -23,6 +24,8 @@ export class ServiceError extends Error {
  * summary envelope only (method identity, requestId, durationMs, and payload SHAPES: types,
  * counts, byte sizes). Full arg/return dumps live at debug (`LOG_LEVEL=debug` to turn on),
  * correlated to their info entries by requestId. No env flag re-routes payload contents to info.
+ * A thrown `ServiceRefusal` (a refusal made on purpose) is a WARN entry with its status, never an
+ * ERROR; every other thrown error is a failure, logged at ERROR.
  */
 export class ServiceExecutor {
   private logger: Logger;
@@ -73,6 +76,22 @@ export class ServiceExecutor {
         _return = await method(...deserializedArgs);
       }
     } catch (error: any) {
+      if (ServiceRefusal.is(error)) {
+        // A refusal the operation made on purpose, not a failure: WARN, with its status and the
+        // operation's name — never the arguments, nor the message (a refusal names what it refused,
+        // often an argument); the router answers with its status and message.
+        this.logger.warn({
+          message: `Refused`,
+          obj: {
+            functionName: this.serviceMethodName,
+            requestId,
+            status: error.status,
+            durationMs: Date.now() - startTime,
+          },
+        });
+        throw error;
+      }
+
       this.logger.error({
         message: `Failed`,
         error,

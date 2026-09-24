@@ -2,6 +2,7 @@ import { Route } from '@proteinjs/server-api';
 import { Service } from './Service';
 import { Interface, SourceRepository } from '@proteinjs/reflection';
 import { ServiceError, ServiceExecutor } from './ServiceExecutor';
+import { ServiceRefusal } from './ServiceRefusal';
 import { isInstanceOf } from '@proteinjs/util';
 import { Logger } from '@proteinjs/logger';
 
@@ -51,6 +52,12 @@ export class ServiceRouter implements Route {
       const serializedReturn = await serviceExecutor.execute(request.body);
       response.send({ serializedReturn });
     } catch (error: any) {
+      if (ServiceRefusal.is(error)) {
+        // A deliberate refusal answers with its own status; the message crosses the wire.
+        response.status(error.status).send({ error: error.message });
+        return;
+      }
+
       if (isServiceError(error)) {
         // ServiceExecutor wraps service-thrown errors in ServiceError; the message crosses the wire.
         response.status(400).send({ error: error.message });
