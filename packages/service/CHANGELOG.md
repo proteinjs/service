@@ -3,6 +3,22 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.6.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.6...@proteinjs/service@1.6.0) (2026-09-24)
+
+
+### Bug Fixes
+
+* a refusal settled on the fire-and-forget path logs the same one WARN entry — never an ERROR carrying its message ([015c43f](https://github.com/proteinjs/service/commit/015c43f9bcd296f7ff36c3a0d25287925fca21c1))
+
+
+### Features
+
+* ServiceRefusal — a refusal an operation throws on purpose answers with its own status and logs at WARN ([3d6ecf2](https://github.com/proteinjs/service/commit/3d6ecf22ef63499ac75ba8c68773b12a59bb894c))
+
+
+
+
+
 ## [1.5.6](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.5...@proteinjs/service@1.5.6) (2026-09-23)
 
 
