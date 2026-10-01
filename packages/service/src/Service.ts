@@ -94,6 +94,18 @@ export const serviceFactory = <T extends Service>(
   debouncer?: ServiceDebounceConfig<T>,
   retry?: ServiceRetryConfig<T>
 ): (() => T) => {
+  // A declared method is never debounced (see ServiceClient.refuseDebouncedDeclaration): refused
+  // here, at the consumer's module load, over the two configs — before any service is made.
+  for (const methodName of Object.keys(retry ?? {}) as KeysWithoutService<T>[]) {
+    const debounced =
+      debouncer !== undefined &&
+      (isInstanceOf(debouncer, Debouncer) || Boolean((debouncer as MethodDebounceConfig<T>)[methodName]));
+    ServiceClient.refuseDebouncedDeclaration(
+      `${serviceInterfaceQualifiedName}.${String(methodName)}`,
+      debounced,
+      retry?.[methodName]
+    );
+  }
   return () => {
     const service: any = {};
     const serviceInterface = SourceRepository.get().interface(serviceInterfaceQualifiedName);

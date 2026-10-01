@@ -228,12 +228,29 @@ export class ServiceClient {
     return getGlobal()[REQUEST_INIT_PROVIDER_GLOBAL_KEY];
   }
 
+  /**
+   * A method with a retry declaration is never debounced: the debouncer runs the call later and
+   * hands the caller nothing, so the call's value and the typed transport error the declaration
+   * exists to deliver would reach no one. Refused here, where the two meet — by the constructor,
+   * and by the service factory as soon as it is handed both configs (at the consumer's module
+   * load, before any service is made). `method` names the method for the message.
+   */
+  static refuseDebouncedDeclaration(method: string, debounced: boolean, retry: ServiceMethodRetry | undefined): void {
+    if (debounced && ServiceClient.isDeclared(retry)) {
+      throw new Error(
+        `${method}: a method with a retry declaration cannot be debounced — the debouncer runs the call later and hands its result and its typed transport error to no one. Declare the retry or the debounce, not both.`
+      );
+    }
+  }
+
   constructor(
     private servicePath: string,
     private serviceMethod: Method,
     private debouncer?: Debouncer,
     private retry?: ServiceMethodRetry
-  ) {}
+  ) {
+    ServiceClient.refuseDebouncedDeclaration(servicePath, debouncer !== undefined, retry);
+  }
 
   async send(...args: any[]): Promise<any> {
     const execute = () => this.executeWithRetry(args);
@@ -459,6 +476,17 @@ export class ServiceClient {
       fromServer: false,
       message: `Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`,
     };
+  }
+
+  /** Whether `retry` declares anything: a read, an idempotent write, or a positive count. */
+  private static isDeclared(retry: ServiceMethodRetry | undefined): boolean {
+    if (retry === 'read') {
+      return true;
+    }
+    if (typeof retry === 'object' && retry !== null && retry.idempotent === true) {
+      return true;
+    }
+    return typeof retry === 'number' && retry > 0;
   }
 
   /** The n-th redelivery's pause: full jitter over the capped exponential series (see {@link REDELIVERY_BASE_MS}). */
