@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.9.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.8.0...@proteinjs/service@1.9.0) (2026-10-01)
+
+
+### Bug Fixes
+
+* **service:** count the keepalive budget before a request leaves; never re-send one ([4fe550b](https://github.com/proteinjs/service/commit/4fe550b7b9d897de9a3329316ec8f909f81f8f65))
+* **service:** re-check the redelivery bound after the pause, not only before it ([de5aac2](https://github.com/proteinjs/service/commit/de5aac205d1e99ee9cd7dc5d8ca19685f3079bbb))
+* **service:** refuse a retry declaration on a debounced method ([f569c94](https://github.com/proteinjs/service/commit/f569c9423fa94cb1e36b42a1adf72ff4867e70c9))
+* **service:** the body bound applies to redeliverable deliveries only ([de19003](https://github.com/proteinjs/service/commit/de19003ddb06bc326fb9ddd610160e0564feac1d))
+
+
+### Features
+
+* **service:** a proxy's 502/503/504 is a transport failure for a redeliverable method ([71760d7](https://github.com/proteinjs/service/commit/71760d7a51816d06e77d7393aa3a41aeb6343983))
+* **service:** bound the response body on the same abort signal; a lost answer is a transport error ([4889fa4](https://github.com/proteinjs/service/commit/4889fa419571c666725b457d00e3004a257ad131))
+* **service:** no first-contact watchdog on a keyed write by default; a per-method opt-in ([db50402](https://github.com/proteinjs/service/commit/db50402ff52a258234edcd20cbe0493315a4cd37))
+* **service:** refuse a keyed call on a multi-process server with no shared ledger ([c6d9257](https://github.com/proteinjs/service/commit/c6d9257c8fc78eb9809b6efc3edda402c9df5dde))
+
+
+
+
+
 # [1.8.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.7.0...@proteinjs/service@1.8.0) (2026-10-01)
 
 
