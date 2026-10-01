@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.7.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.6.0...@proteinjs/service@1.7.0) (2026-10-01)
+
+
+### Features
+
+* a first-contact watchdog and one redelivery for service methods declared reads ([a2dcb79](https://github.com/proteinjs/service/commit/a2dcb79452ff552abc47596288f59df2b0bc41ad))
+
+
+
+
+
 # [1.6.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.5.6...@proteinjs/service@1.6.0) (2026-09-24)
 
 
