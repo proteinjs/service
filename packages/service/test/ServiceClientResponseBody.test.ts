@@ -113,10 +113,19 @@ describe('the body bound', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  it('an undeclared method whose body never arrives: the typed error at the bound — reached the server, not answered, stalled — surfaced once', async () => {
+  it('a keyed write whose body never arrives: abandoned at the bound — reached the server, not answered, stalled — then redelivered', async () => {
     global.fetch = jest.fn(headersThenHangingBody) as any;
-    const outcome = track(createClient().send('a'));
+    const outcome = track(createClient({ idempotent: true }).send('a'));
 
+    await jest.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS);
+    expect(sentRequests()[0].init.signal.aborted).toBe(true);
+    expect(outcome.state).toBe('pending');
+    await jest.advanceTimersByTimeAsync(REDELIVERY_CAP_MS);
+    expect(sentRequests()).toHaveLength(2);
+    expect(sentRequests()[1].init.headers[IDEMPOTENCY_KEY_HEADER]).toBe(
+      sentRequests()[0].init.headers[IDEMPOTENCY_KEY_HEADER]
+    );
+    // The second stalls at ≈ 60 s — past the 45 s bound: the typed error, nothing more sent.
     await jest.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS);
     expect(outcome.state).toBe('rejected');
     expect(ServiceTransportError.is(outcome.error)).toBe(true);
@@ -124,13 +133,22 @@ describe('the body bound', () => {
       reachedServer: true,
       answered: false,
       stalled: true,
-      attempts: 1,
+      attempts: 2,
       servicePath: SERVICE_PATH,
     });
     expect(ServiceTransportError.isNotReached(outcome.error)).toBe(false);
-    expect(sentRequests()).toHaveLength(1);
     await jest.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS);
+    expect(sentRequests()).toHaveLength(2);
+  });
+
+  it('an undeclared method is untouched by the bound: no signal on its request, a body that never arrives waits as before', async () => {
+    global.fetch = jest.fn(headersThenHangingBody) as any;
+    const outcome = track(createClient().send('a'));
+    await jest.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS * 4);
+    expect(outcome.state).toBe('pending');
     expect(sentRequests()).toHaveLength(1);
+    expect(sentRequests()[0].init.signal).toBeUndefined();
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   it('a declared read whose body dies under it: redelivered at once as a fresh request', async () => {
@@ -141,13 +159,13 @@ describe('the body bound', () => {
     expect(outcome).toMatchObject({ state: 'resolved', value: 'ok' });
   });
 
-  it('an undeclared method whose body dies under it: the typed error with the cause, once', async () => {
+  it('an undeclared method whose body dies under it: the transport’s own TypeError, as before — once, not typed, not redelivered', async () => {
     global.fetch = jest.fn(headersThenDeadBody) as any;
     const outcome = track(createClient().send('a'));
-    await jest.advanceTimersByTimeAsync(0);
+    await jest.advanceTimersByTimeAsync(REDELIVERY_CAP_MS);
     expect(outcome.state).toBe('rejected');
-    expect(outcome.error).toMatchObject({ reachedServer: true, answered: false, stalled: false, attempts: 1 });
-    expect(outcome.error.cause).toBeInstanceOf(TypeError);
+    expect(outcome.error).toBeInstanceOf(TypeError);
+    expect(ServiceTransportError.is(outcome.error)).toBe(false);
     expect(sentRequests()).toHaveLength(1);
   });
 
