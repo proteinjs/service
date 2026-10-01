@@ -1,9 +1,0 @@
-{
-  "branch": "feat/client-first-contact-watchdog",
-  "packages": ["service"],
-  "suites": [
-    "packages/service/test/ServiceClientFirstContact.test.ts",
-    "packages/service/test/ServiceClient.test.ts"
-  ],
-  "removes": []
-}
