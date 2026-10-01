@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.8.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.7.0...@proteinjs/service@1.8.0) (2026-10-01)
+
+
+### Features
+
+* the client's retry policy by class — reads under a jittered exponential series, idempotent writes under one key the server runs once ([3503f6a](https://github.com/proteinjs/service/commit/3503f6ac0204fc4b6d32c9199aaadb22211211f9))
+
+
+
+
+
 # [1.7.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.6.0...@proteinjs/service@1.7.0) (2026-10-01)
 
 
