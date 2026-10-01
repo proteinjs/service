@@ -17,3 +17,11 @@ export {
   ServiceRequestInit,
   ServiceRequestInitProvider,
 } from './src/ServiceClient';
+// ServiceTransportError is the one error a service call rejects with when it produced NO response —
+// the transport rejected the request, or a declared read's first-contact watchdog abandoned it:
+// reachedServer is false (contact was never confirmed), and a consumer surface reads it to offer a
+// retry in place of what it could not load. The declaration (`'read'` per method at the factory),
+// the read's first-contact bound and the pause before its one redelivery are exported beside it, for
+// consumers that bound their own loading states on the same clock.
+export { ServiceTransportError } from './src/ServiceTransportError';
+export { READ_CONTACT_TIMEOUT_MS, READ_REDELIVERY_DELAY_MS, ServiceMethodRetry } from './src/ServiceClient';

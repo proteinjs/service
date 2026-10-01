@@ -2,6 +2,7 @@ import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Debouncer } from '@proteinjs/util';
 import { isVoidReturnType } from './isVoidReturnType';
+import { ServiceTransportError } from './ServiceTransportError';
 
 /** See {@link ServiceClient.setDefaultHeadersProvider}. */
 export type ServiceRequestHeadersProvider = () => { [headerName: string]: string };
@@ -24,6 +25,46 @@ export type ServiceRequestInitProvider = (request: {
   /** The serialized request body's length in bytes. */
   bodyBytes: number;
 }) => ServiceRequestInit;
+
+/**
+ * How the client may retry a method — the declarer's assertion at the service factory, never
+ * inferred from a method's name:
+ *
+ * - `'read'`: the method reads and answers; a second delivery returns the same truth and costs
+ *   the server nothing it would not have done. The client bounds the call's first contact
+ *   ({@link READ_CONTACT_TIMEOUT_MS}) and redelivers a transport failure once; a server's answer
+ *   — a value or a verdict of any status — is never redelivered.
+ * - a number: the earlier shape — the delivery is retried that many times after ANY failure, a
+ *   server's verdict included, one second apart. Kept for the methods declared with it.
+ *
+ * Undeclared (the default): one delivery, no first-contact bound. A method that may be doing long
+ * work on the server before it answers, or applying a change a second delivery would apply again,
+ * must stay undeclared.
+ */
+export type ServiceMethodRetry = 'read' | number;
+
+/**
+ * The first-contact bound for a method declared a read: when no response headers have arrived
+ * inside it, the request is abandoned and the call rejects with a {@link ServiceTransportError}
+ * (`reachedServer: false`, `stalled: true`) — after the one redelivery below.
+ *
+ * Why 15 s: a read answers in one round trip — the server runs its query and replies, hundreds of
+ * milliseconds end to end on a healthy path, and a serving path's own latency alerting fires well
+ * under this (a consuming application alerts at a p95 of 2 s). A request with no headers after 15 s
+ * is not waiting on a slow server; it is sitting in a client-side connection that has stopped
+ * carrying bytes — a phone's pooled connection was observed holding a read for three minutes before
+ * the browser gave up on it, the surface behind the read blank the whole time. 15 s is also the
+ * first-contact bound a consuming application's streaming send already uses, so a client keeps one
+ * first-contact clock. Declared reads only: abandoning a method that may legitimately answer after
+ * long work would report an unconfirmed delivery for work the server was doing.
+ */
+export const READ_CONTACT_TIMEOUT_MS = 15_000;
+
+/**
+ * The pause before a declared read's one redelivery. Short because the redelivery is blind — a
+ * read has no evidence channel to consult before trying again, and a surface is empty meanwhile.
+ */
+export const READ_REDELIVERY_DELAY_MS = 1_000;
 
 /**
  * The request-init provider slot lives on the global object, not in module scope: per-package
@@ -84,57 +125,108 @@ export class ServiceClient {
     private servicePath: string,
     private serviceMethod: Method,
     private debouncer?: Debouncer,
-    private retryCount: number = 0
+    private retry?: ServiceMethodRetry
   ) {}
 
   async send(...args: any[]): Promise<any> {
-    const sendRequest = async () => {
-      const serializedArgs = Serializer.serialize(args);
-      const requestNumber = ServiceClient.requestCounter;
-      ServiceClient.requestCounter++;
-      console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
-      console.log(args);
-      console.groupEnd();
-      const serializedReturn = await this._send(this.servicePath, serializedArgs);
-      const deserializedReturn = Serializer.deserialize(serializedReturn);
-      console.groupCollapsed(
-        `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
-      );
-      console.log(deserializedReturn);
-      console.groupEnd();
-
-      return deserializedReturn;
-    };
-
-    const executeWithRetry = async (fn: () => Promise<any>) => {
-      const maxAttempts = 1 + this.retryCount;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        try {
-          return await fn();
-        } catch (error) {
-          if (attempt === maxAttempts - 1) {
-            throw error;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 1000)); // 1 second delay before retry
-        }
-      }
-    };
-
-    const executeRequest = this.retryCount > 0 ? executeWithRetry : (fn: () => Promise<any>) => fn();
-
+    const execute = () => this.executeWithRetry(args);
     if (this.debouncer) {
-      return this.debouncer.debounce(() => executeRequest(sendRequest), args);
+      return this.debouncer.debounce(execute, args);
     } else {
-      return executeRequest(sendRequest);
+      return execute();
     }
   }
 
-  private async _send(absoluteUrl: string, serializedArgs: string) {
+  /** The delivery under the method's declared retry (see {@link ServiceMethodRetry}). */
+  private executeWithRetry(args: any[]): Promise<any> {
+    if (this.retry === 'read') {
+      return this.deliverRead(args);
+    }
+    if (typeof this.retry === 'number' && this.retry > 0) {
+      return this.deliverWithRetries(args, this.retry);
+    }
+    return this.deliver(args);
+  }
+
+  /**
+   * A method declared a read: delivered under the first-contact bound; a transport failure — the
+   * watchdog abandoning a stalled request, or the transport rejecting it outright — is redelivered
+   * ONCE, after {@link READ_REDELIVERY_DELAY_MS}, as a fresh request. A second failure is the
+   * caller's, its `attempts` stamped. A response of any status is never redelivered: the server
+   * answered.
+   */
+  private async deliverRead(args: any[]): Promise<any> {
+    try {
+      return await this.deliver(args, READ_CONTACT_TIMEOUT_MS);
+    } catch (error) {
+      if (!ServiceTransportError.is(error)) {
+        throw error;
+      }
+      await ServiceClient.pause(READ_REDELIVERY_DELAY_MS);
+      try {
+        return await this.deliver(args, READ_CONTACT_TIMEOUT_MS);
+      } catch (redeliveryError) {
+        if (ServiceTransportError.is(redeliveryError)) {
+          redeliveryError.attempts = 2;
+        }
+        throw redeliveryError;
+      }
+    }
+  }
+
+  /**
+   * The per-method count: the delivery is retried `retries` times after ANY failure — a server's
+   * verdict included — one second apart.
+   */
+  private async deliverWithRetries(args: any[], retries: number): Promise<any> {
+    const maxAttempts = 1 + retries;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await this.deliver(args);
+      } catch (error) {
+        if (attempt === maxAttempts - 1) {
+          throw error;
+        }
+        await ServiceClient.pause(1000);
+      }
+    }
+  }
+
+  /** One delivery: serialize, send, deserialize — logged under its request number. */
+  private async deliver(args: any[], contactTimeoutMs?: number): Promise<any> {
+    const serializedArgs = Serializer.serialize(args);
+    const requestNumber = ServiceClient.requestCounter;
+    ServiceClient.requestCounter++;
+    console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
+    console.log(args);
+    console.groupEnd();
+    const serializedReturn = await this._send(this.servicePath, serializedArgs, contactTimeoutMs);
+    const deserializedReturn = Serializer.deserialize(serializedReturn);
+    console.groupCollapsed(
+      `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
+    );
+    console.log(deserializedReturn);
+    console.groupEnd();
+
+    return deserializedReturn;
+  }
+
+  /**
+   * The request on the wire. With `contactTimeoutMs`, the first-contact watchdog: the request is
+   * abandoned (its signal aborted — the browser drops the stalled transfer, so a redelivery is a
+   * fresh request) when no response headers have arrived inside the bound. A request that produced
+   * no response — the watchdog fired, or the transport rejected it — throws a
+   * {@link ServiceTransportError}; a response of any status is the server's answer and is read as
+   * before.
+   */
+  private async _send(absoluteUrl: string, serializedArgs: string, contactTimeoutMs?: number) {
     const provided = ServiceClient.requestInitProvider()?.({
       servicePath: absoluteUrl,
       bodyBytes: ServiceClient.utf8ByteLength(serializedArgs),
     });
+    const watchdog = contactTimeoutMs === undefined ? undefined : new AbortController();
     const init = (keepalive: boolean): RequestInit => ({
+      ...(watchdog ? { signal: watchdog.signal } : {}),
       ...(keepalive ? { keepalive: true } : {}),
       method: 'POST',
       body: serializedArgs,
@@ -147,17 +239,24 @@ export class ServiceClient {
       },
     });
     const keepalive = provided?.keepalive === true;
+    let stalled = false;
+    const timer =
+      watchdog &&
+      setTimeout(() => {
+        stalled = true;
+        watchdog.abort();
+      }, contactTimeoutMs);
     let response: Response;
     try {
-      response = await fetch(new Request(absoluteUrl, init(keepalive)));
+      response = await this.firstContact(absoluteUrl, init, keepalive);
     } catch (error) {
-      // The ONE named fallback: the browser refuses a keepalive request over its in-flight cap
-      // with a TypeError before anything is sent. The request is re-sent as an ordinary one —
-      // the write is not lost to the cap. Any other failure (a network error) is the caller's.
-      if (!keepalive || !(error instanceof TypeError)) {
-        throw error;
+      throw stalled
+        ? ServiceTransportError.stalled(absoluteUrl, contactTimeoutMs as number)
+        : ServiceTransportError.failed(absoluteUrl, error);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
       }
-      response = await fetch(new Request(absoluteUrl, init(false)));
     }
     if (response.status != 200) {
       throw new Error(await this.errorMessage(response, absoluteUrl));
@@ -169,6 +268,25 @@ export class ServiceClient {
     }
 
     return body.serializedReturn;
+  }
+
+  /** The fetch that produces the response, with the ONE named fallback (the keepalive cap). */
+  private async firstContact(
+    absoluteUrl: string,
+    init: (keepalive: boolean) => RequestInit,
+    keepalive: boolean
+  ): Promise<Response> {
+    try {
+      return await fetch(new Request(absoluteUrl, init(keepalive)));
+    } catch (error) {
+      // The ONE named fallback: the browser refuses a keepalive request over its in-flight cap
+      // with a TypeError before anything is sent. The request is re-sent as an ordinary one —
+      // the write is not lost to the cap. Any other failure (a network error) is the caller's.
+      if (!keepalive || !(error instanceof TypeError)) {
+        throw error;
+      }
+      return fetch(new Request(absoluteUrl, init(false)));
+    }
   }
 
   /**
@@ -186,6 +304,10 @@ export class ServiceClient {
     }
 
     return `Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`;
+  }
+
+  private static pause(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**

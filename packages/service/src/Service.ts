@@ -1,6 +1,6 @@
 import { SerializableFunction, NotFunction } from '@proteinjs/serializer';
 import { Loadable, SourceRepository } from '@proteinjs/reflection';
-import { ServiceClient } from './ServiceClient';
+import { ServiceClient, ServiceMethodRetry } from './ServiceClient';
 import { Debouncer, GetDebounceKey, isInstanceOf } from '@proteinjs/util';
 
 type RemoveIndex<T> = {
@@ -14,8 +14,13 @@ type Diff<T, U> = T extends U ? never : T;
 // Get only the keys specific to T, excluding those from Service
 type KeysWithoutService<T extends Service> = Diff<KeysWithoutIndexSignature<T>, KeysWithoutIndexSignature<Service>>;
 
-type RetryConfig<T extends Service> = {
-  [K in KeysWithoutService<T>]?: number;
+/**
+ * Per method, how the client may retry it — the declarer's assertion, never inferred from a name
+ * (see {@link ServiceMethodRetry}): `'read'` for a method that reads and answers, the earlier
+ * numeric count where one is declared, nothing for every other method.
+ */
+export type ServiceRetryConfig<T extends Service> = {
+  [K in KeysWithoutService<T>]?: ServiceMethodRetry;
 };
 
 interface DebounceConfig {
@@ -79,12 +84,13 @@ function getOrCreateDebouncer(methodName: string, config: DebounceConfig): Debou
  * ServiceClient wrapped in the interface's api.
  * @param serviceInterfaceQualifiedName the package-qualified name of the service interface (ie. service-package-name/MyService)
  * @param debouncer pass in either a single debouncer instance or method-specific debounce configurations
+ * @param retry per method, how the client may retry it (`'read'` for a method that reads and answers)
  * @returns a function that creates a Service
  */
 export const serviceFactory = <T extends Service>(
   serviceInterfaceQualifiedName: string,
   debouncer?: ServiceDebounceConfig<T>,
-  retryConfig?: RetryConfig<T>
+  retry?: ServiceRetryConfig<T>
 ): (() => T) => {
   return () => {
     const service: any = {};
@@ -93,10 +99,7 @@ export const serviceFactory = <T extends Service>(
       const servicePath = `/service/${serviceInterface.qualifiedName}/${method.name}`;
       const methodName = method.name as KeysWithoutService<T>;
 
-      let retryCount = 0;
-      if (retryConfig && methodName in retryConfig) {
-        retryCount = retryConfig[methodName]!;
-      }
+      const methodRetry = retry?.[methodName];
 
       let methodDebouncer: Debouncer | undefined;
       if (debouncer) {
@@ -110,7 +113,7 @@ export const serviceFactory = <T extends Service>(
         }
       }
 
-      const serviceClient = new ServiceClient(servicePath, method, methodDebouncer, retryCount);
+      const serviceClient = new ServiceClient(servicePath, method, methodDebouncer, methodRetry);
       service[methodName] = serviceClient.send.bind(serviceClient);
     }
 
