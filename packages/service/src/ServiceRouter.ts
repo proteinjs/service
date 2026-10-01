@@ -3,6 +3,7 @@ import { Service } from './Service';
 import { Interface, SourceRepository } from '@proteinjs/reflection';
 import { ServiceError, ServiceExecutor } from './ServiceExecutor';
 import { ServiceRefusal } from './ServiceRefusal';
+import { IDEMPOTENCY_KEY_HEADER } from './ServiceClient';
 import { isInstanceOf } from '@proteinjs/util';
 import { Logger } from '@proteinjs/logger';
 
@@ -49,7 +50,9 @@ export class ServiceRouter implements Route {
     }
 
     try {
-      const serializedReturn = await serviceExecutor.execute(request.body);
+      const serializedReturn = await serviceExecutor.execute(request.body, {
+        idempotencyKey: ServiceRouter.idempotencyKeyOf(request),
+      });
       response.send({ serializedReturn });
     } catch (error: any) {
       if (ServiceRefusal.is(error)) {
@@ -67,5 +70,11 @@ export class ServiceRouter implements Route {
       this.logger.error({ error });
       response.status(500).send({ error: 'Internal server error' });
     }
+  }
+
+  /** The call's idempotency key, when the client sent one (header names arrive lower-cased). */
+  private static idempotencyKeyOf(request: any): string | undefined {
+    const value = request.headers?.[IDEMPOTENCY_KEY_HEADER.toLowerCase()];
+    return typeof value === 'string' && value !== '' ? value : undefined;
   }
 }

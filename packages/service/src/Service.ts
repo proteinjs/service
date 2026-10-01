@@ -16,8 +16,9 @@ type KeysWithoutService<T extends Service> = Diff<KeysWithoutIndexSignature<T>, 
 
 /**
  * Per method, how the client may retry it — the declarer's assertion, never inferred from a name
- * (see {@link ServiceMethodRetry}): `'read'` for a method that reads and answers, the earlier
- * numeric count where one is declared, nothing for every other method.
+ * (see {@link ServiceMethodRetry}): `'read'` for a method that reads and answers,
+ * `{ idempotent: true }` for a write the server may see twice (one key per call, deduplicated on the
+ * server), the earlier numeric count where one is declared, nothing for every other method.
  */
 export type ServiceRetryConfig<T extends Service> = {
   [K in KeysWithoutService<T>]?: ServiceMethodRetry;
@@ -84,7 +85,8 @@ function getOrCreateDebouncer(methodName: string, config: DebounceConfig): Debou
  * ServiceClient wrapped in the interface's api.
  * @param serviceInterfaceQualifiedName the package-qualified name of the service interface (ie. service-package-name/MyService)
  * @param debouncer pass in either a single debouncer instance or method-specific debounce configurations
- * @param retry per method, how the client may retry it (`'read'` for a method that reads and answers)
+ * @param retry per method, how the client may retry it (`'read'` for a method that reads and answers;
+ *   `{ idempotent: true }` for a write deduplicated on the server by the call's key)
  * @returns a function that creates a Service
  */
 export const serviceFactory = <T extends Service>(

@@ -28,25 +28,39 @@ export type ServiceRequestInitProvider = (request: {
 
 /**
  * How the client may retry a method — the declarer's assertion at the service factory, never
- * inferred from a method's name:
+ * inferred from a method's name. Whatever the declaration, the client redelivers ONLY a delivery
+ * that produced no response (the transport rejected the request, or the first-contact watchdog
+ * abandoned it): a server's answer of any status is never redelivered — the server decided, and a
+ * transient fault there is the server's own to retry.
  *
- * - `'read'`: the method reads and answers; a second delivery returns the same truth and costs
- *   the server nothing it would not have done. The client bounds the call's first contact
- *   ({@link READ_CONTACT_TIMEOUT_MS}) and redelivers a transport failure once; a server's answer
- *   — a value or a verdict of any status — is never redelivered.
- * - a number: the earlier shape — the delivery is retried that many times after ANY failure, a
- *   server's verdict included, one second apart. Kept for the methods declared with it.
+ * - `'read'`: the method reads and answers; a second delivery returns the same truth. Each delivery
+ *   is bounded by the first-contact watchdog ({@link READ_CONTACT_TIMEOUT_MS}); a delivery that
+ *   produced no response is redelivered as a fresh request under the jittered exponential series
+ *   ({@link REDELIVERY_BASE_MS}, {@link REDELIVERY_CAP_MS}) inside the budget
+ *   ({@link REDELIVERY_BUDGET}) and the total bound ({@link REDELIVERY_TOTAL_BOUND_MS}); after the
+ *   last, the call rejects with a {@link ServiceTransportError} carrying `attempts` and the last cause.
+ * - `{ idempotent: true }`: the method writes, and a redelivery must not apply it twice — so the
+ *   client mints one idempotency key per call and sends it on every delivery of that call
+ *   ({@link IDEMPOTENCY_KEY_HEADER}); the server runs the method once per key and answers a replay
+ *   with the recorded result (see `IdempotencyLedger`). Delivered under the same watchdog, series,
+ *   budget and bound as a read. The ledger's scope is the server's: in-process by default, so a
+ *   deployment of several server processes registers a shared ledger (see
+ *   `ServiceExecutor.setIdempotencyLedger`) before declaring a method idempotent.
+ * - a number: the earlier grammar — the delivery is retried that many times after ANY failure, a
+ *   server's verdict included, one second apart. Kept only for the methods already declared with
+ *   it; a method whose redelivery is safe declares `'read'` or `{ idempotent: true }` instead, and
+ *   the numeric arm is removed once no declaration uses it.
  *
- * Undeclared (the default): one delivery, no first-contact bound. A method that may be doing long
- * work on the server before it answers, or applying a change a second delivery would apply again,
- * must stay undeclared.
+ * Undeclared (the default): one delivery, no first-contact bound, no redelivery. A method that may
+ * be doing long work on the server before it answers, or applying a change a second delivery would
+ * apply again, stays undeclared.
  */
-export type ServiceMethodRetry = 'read' | number;
+export type ServiceMethodRetry = 'read' | { idempotent: true } | number;
 
 /**
- * The first-contact bound for a method declared a read: when no response headers have arrived
- * inside it, the request is abandoned and the call rejects with a {@link ServiceTransportError}
- * (`reachedServer: false`, `stalled: true`) — after the one redelivery below.
+ * The first-contact bound for a declared method: when no response headers have arrived inside it,
+ * the request is abandoned (its signal aborted, so the browser drops the stalled transfer and the
+ * redelivery is a fresh request) and the delivery counts as having produced no response.
  *
  * Why 15 s: a read answers in one round trip — the server runs its query and replies, hundreds of
  * milliseconds end to end on a healthy path, and a serving path's own latency alerting fires well
@@ -55,16 +69,48 @@ export type ServiceMethodRetry = 'read' | number;
  * carrying bytes — a phone's pooled connection was observed holding a read for three minutes before
  * the browser gave up on it, the surface behind the read blank the whole time. 15 s is also the
  * first-contact bound a consuming application's streaming send already uses, so a client keeps one
- * first-contact clock. Declared reads only: abandoning a method that may legitimately answer after
+ * first-contact clock. Declared methods only: abandoning a method that may legitimately answer after
  * long work would report an unconfirmed delivery for work the server was doing.
  */
 export const READ_CONTACT_TIMEOUT_MS = 15_000;
 
 /**
- * The pause before a declared read's one redelivery. Short because the redelivery is blind — a
- * read has no evidence channel to consult before trying again, and a surface is empty meanwhile.
+ * The redeliveries after the first delivery — four deliveries at most. The series below needs
+ * three pauses (1 s, 2 s, 4 s) to be a series at all, and together they span the few seconds a
+ * phone's network handoff takes — the failure a blind redelivery can ride out. Past four, more
+ * blind tries are the person's call (a retry they ask for), not the client's.
  */
-export const READ_REDELIVERY_DELAY_MS = 1_000;
+export const REDELIVERY_BUDGET = 3;
+
+/**
+ * The pause before the n-th redelivery (n from 0) is drawn uniformly from
+ * [0, min({@link REDELIVERY_CAP_MS}, {@link REDELIVERY_BASE_MS} × 2^n)] — full jitter: the
+ * exponential growth so a server coming back is not met by every waiting client at once, the random
+ * draw so clients that failed together do not retry together. The base is 1 s: a redelivery is blind
+ * (there is no evidence to consult before trying again) and a surface is empty meanwhile, so the
+ * first pause is short.
+ */
+export const REDELIVERY_BASE_MS = 1_000;
+
+/**
+ * No pause is longer than 4 s: an empty surface past that reads as broken, and under the
+ * per-delivery watchdog a longer pause only spends the total bound waiting instead of trying.
+ */
+export const REDELIVERY_CAP_MS = 4_000;
+
+/**
+ * A redelivery leaves only while less than this has passed since the first delivery left (its own
+ * pause counted). Three stalled deliveries at the watchdog's 15 s fit inside it — the one case that
+ * takes long: the first fresh request after a stall usually lands (the stall was one dead
+ * connection), a second stall says the link itself is down, and a third 15-s wait is the last a
+ * person reads as "it tried" rather than "it hung". The longest a call can take is the bound plus
+ * one watchdog — a redelivery that left just inside the bound and stalled: under a minute. Every
+ * delivery that produced no response within the budget and the bound rejects with the typed error.
+ */
+export const REDELIVERY_TOTAL_BOUND_MS = 45_000;
+
+/** The request header carrying a method's idempotency key — one key per call, the same on every delivery. */
+export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 
 /**
  * The request-init provider slot lives on the global object, not in module scope: per-package
@@ -79,6 +125,9 @@ const getGlobal = (): any => (typeof window !== 'undefined' ? window : globalThi
 
 export class ServiceClient {
   private static requestCounter = 1;
+
+  /** The jitter's draw in [0, 1) — the one source of randomness in the redelivery series. */
+  private static random: () => number = Math.random;
 
   /**
    * Ambient client-context headers attached to every service request this client sends.
@@ -140,7 +189,10 @@ export class ServiceClient {
   /** The delivery under the method's declared retry (see {@link ServiceMethodRetry}). */
   private executeWithRetry(args: any[]): Promise<any> {
     if (this.retry === 'read') {
-      return this.deliverRead(args);
+      return this.deliverUnderPolicy(args, undefined);
+    }
+    if (typeof this.retry === 'object' && this.retry !== null && this.retry.idempotent === true) {
+      return this.deliverUnderPolicy(args, ServiceClient.mintIdempotencyKey());
     }
     if (typeof this.retry === 'number' && this.retry > 0) {
       return this.deliverWithRetries(args, this.retry);
@@ -149,27 +201,31 @@ export class ServiceClient {
   }
 
   /**
-   * A method declared a read: delivered under the first-contact bound; a transport failure — the
-   * watchdog abandoning a stalled request, or the transport rejecting it outright — is redelivered
-   * ONCE, after {@link READ_REDELIVERY_DELAY_MS}, as a fresh request. A second failure is the
-   * caller's, its `attempts` stamped. A response of any status is never redelivered: the server
-   * answered.
+   * The policy for a declared method: every delivery under the first-contact watchdog; a delivery
+   * that produced no response is redelivered as a fresh request after a jittered exponential pause,
+   * while the budget and the total bound allow; a response of any status is never redelivered. The
+   * last transport error carries the count of deliveries made. An idempotent method's key rides
+   * every delivery of the call.
    */
-  private async deliverRead(args: any[]): Promise<any> {
-    try {
-      return await this.deliver(args, READ_CONTACT_TIMEOUT_MS);
-    } catch (error) {
-      if (!ServiceTransportError.is(error)) {
-        throw error;
-      }
-      await ServiceClient.pause(READ_REDELIVERY_DELAY_MS);
+  private async deliverUnderPolicy(args: any[], idempotencyKey: string | undefined): Promise<any> {
+    const headers = idempotencyKey === undefined ? undefined : { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey };
+    const startedAt = Date.now();
+    for (let attempt = 1; ; attempt++) {
       try {
-        return await this.deliver(args, READ_CONTACT_TIMEOUT_MS);
-      } catch (redeliveryError) {
-        if (ServiceTransportError.is(redeliveryError)) {
-          redeliveryError.attempts = 2;
+        return await this.deliver(args, READ_CONTACT_TIMEOUT_MS, headers);
+      } catch (error) {
+        if (!ServiceTransportError.is(error)) {
+          throw error;
         }
-        throw redeliveryError;
+        error.attempts = attempt;
+        if (attempt > REDELIVERY_BUDGET) {
+          throw error;
+        }
+        const pause = ServiceClient.redeliveryPause(attempt - 1);
+        if (Date.now() + pause - startedAt >= REDELIVERY_TOTAL_BOUND_MS) {
+          throw error;
+        }
+        await ServiceClient.pause(pause);
       }
     }
   }
@@ -193,14 +249,18 @@ export class ServiceClient {
   }
 
   /** One delivery: serialize, send, deserialize — logged under its request number. */
-  private async deliver(args: any[], contactTimeoutMs?: number): Promise<any> {
+  private async deliver(
+    args: any[],
+    contactTimeoutMs?: number,
+    headers?: { [headerName: string]: string }
+  ): Promise<any> {
     const serializedArgs = Serializer.serialize(args);
     const requestNumber = ServiceClient.requestCounter;
     ServiceClient.requestCounter++;
     console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
     console.log(args);
     console.groupEnd();
-    const serializedReturn = await this._send(this.servicePath, serializedArgs, contactTimeoutMs);
+    const serializedReturn = await this._send(this.servicePath, serializedArgs, contactTimeoutMs, headers);
     const deserializedReturn = Serializer.deserialize(serializedReturn);
     console.groupCollapsed(
       `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
@@ -217,9 +277,15 @@ export class ServiceClient {
    * fresh request) when no response headers have arrived inside the bound. A request that produced
    * no response — the watchdog fired, or the transport rejected it — throws a
    * {@link ServiceTransportError}; a response of any status is the server's answer and is read as
-   * before.
+   * before. `headers` are the call's own (an idempotency key), set after the ambient provider's and
+   * under the reserved ones.
    */
-  private async _send(absoluteUrl: string, serializedArgs: string, contactTimeoutMs?: number) {
+  private async _send(
+    absoluteUrl: string,
+    serializedArgs: string,
+    contactTimeoutMs?: number,
+    headers?: { [headerName: string]: string }
+  ) {
     const provided = ServiceClient.requestInitProvider()?.({
       servicePath: absoluteUrl,
       bodyBytes: ServiceClient.utf8ByteLength(serializedArgs),
@@ -235,6 +301,7 @@ export class ServiceClient {
       headers: {
         // Provider-supplied client-context headers first so reserved headers always win.
         ...(ServiceClient.defaultHeadersProvider ? ServiceClient.defaultHeadersProvider() : {}),
+        ...(headers ?? {}),
         'Content-Type': 'application/json',
       },
     });
@@ -306,8 +373,30 @@ export class ServiceClient {
     return `Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`;
   }
 
+  /** The n-th redelivery's pause: full jitter over the capped exponential series (see {@link REDELIVERY_BASE_MS}). */
+  private static redeliveryPause(n: number): number {
+    const ceiling = Math.min(REDELIVERY_CAP_MS, REDELIVERY_BASE_MS * Math.pow(2, n));
+    return Math.floor(ServiceClient.random() * ceiling);
+  }
+
   private static pause(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * A key no two calls share: 16 random bytes in the UUID (version 4) layout, from the platform's
+   * random source — available in every page, secure context or not, and in node.
+   */
+  private static mintIdempotencyKey(): string {
+    const bytes = new Uint8Array(16);
+    getGlobal().crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+      hex += (bytes[i] < 0x10 ? '0' : '') + bytes[i].toString(16);
+    }
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 
   /**

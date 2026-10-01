@@ -1,11 +1,6 @@
 import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
-import {
-  READ_CONTACT_TIMEOUT_MS,
-  READ_REDELIVERY_DELAY_MS,
-  ServiceClient,
-  ServiceMethodRetry,
-} from '../src/ServiceClient';
+import { READ_CONTACT_TIMEOUT_MS, REDELIVERY_BASE_MS, ServiceClient, ServiceMethodRetry } from '../src/ServiceClient';
 import { ServiceTransportError } from '../src/ServiceTransportError';
 
 // Node's Request rejects the relative service paths a browser resolves against the page origin
@@ -70,7 +65,7 @@ describe('the first-contact watchdog — a method declared a read', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  it('a read whose transport never answers is abandoned at the bound, redelivered once, then rejects with reachedServer:false', async () => {
+  it('a read whose transport never answers is abandoned at the bound and redelivered as a fresh request', async () => {
     global.fetch = neverAnswers() as any;
     const outcome = track(createClient('read').send('a'));
 
@@ -84,25 +79,14 @@ describe('the first-contact watchdog — a method declared a read', () => {
     expect(sentRequests()[0].init.signal.aborted).toBe(true);
     expect(outcome.state).toBe('pending');
 
-    // The pause, then a fresh request carrying the same body.
-    await jest.advanceTimersByTimeAsync(READ_REDELIVERY_DELAY_MS);
+    // The pause (the series' first, under its base), then a fresh request carrying the same body
+    // under its own watchdog. The series' end is ServiceClientRetryPolicy's to pin.
+    await jest.advanceTimersByTimeAsync(REDELIVERY_BASE_MS);
     expect(sentRequests()).toHaveLength(2);
     expect(sentRequests()[1]).not.toBe(sentRequests()[0]);
     expect(sentRequests()[1].init.body).toBe(Serializer.serialize(['a']));
     expect(sentRequests()[1].init.signal.aborted).toBe(false);
-
-    // The redelivery stalls too: the typed error, two attempts, nothing more sent.
-    await jest.advanceTimersByTimeAsync(READ_CONTACT_TIMEOUT_MS);
-    expect(outcome.state).toBe('rejected');
-    expect(ServiceTransportError.is(outcome.error)).toBe(true);
-    expect(ServiceTransportError.isNotReached(outcome.error)).toBe(true);
-    expect(outcome.error).toMatchObject({
-      reachedServer: false,
-      stalled: true,
-      attempts: 2,
-      servicePath: SERVICE_PATH,
-    });
-    expect(sentRequests()).toHaveLength(2);
+    expect(outcome.state).toBe('pending');
   });
 
   it('a read answered inside the bound resolves, and the watchdog is cleared', async () => {
@@ -114,7 +98,7 @@ describe('the first-contact watchdog — a method declared a read', () => {
   });
 });
 
-describe('a declared read redelivers a transport failure once', () => {
+describe('a declared read redelivers a transport failure', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
@@ -126,21 +110,10 @@ describe('a declared read redelivers a transport failure once', () => {
       })
       .mockImplementationOnce(async () => okResponse()) as any;
     const outcome = track(createClient('read').send('a'));
-    await jest.advanceTimersByTimeAsync(READ_REDELIVERY_DELAY_MS);
+    await jest.advanceTimersByTimeAsync(REDELIVERY_BASE_MS);
     expect(outcome).toMatchObject({ state: 'resolved', value: 'ok' });
     expect(sentRequests()).toHaveLength(2);
     expect(sentRequests()[1].init.body).toBe(Serializer.serialize(['a']));
-  });
-
-  it('rejected twice: the typed error stamped with two attempts, no third request', async () => {
-    global.fetch = jest.fn(async () => {
-      throw new TypeError('Failed to fetch');
-    }) as any;
-    const outcome = track(createClient('read').send('a'));
-    await jest.advanceTimersByTimeAsync(READ_REDELIVERY_DELAY_MS);
-    expect(outcome.state).toBe('rejected');
-    expect(outcome.error).toMatchObject({ reachedServer: false, stalled: false, attempts: 2 });
-    expect(sentRequests()).toHaveLength(2);
   });
 
   it('a server verdict is never redelivered: one request, the verdict is the caller’s', async () => {

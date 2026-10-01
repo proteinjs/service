@@ -18,10 +18,29 @@ export {
   ServiceRequestInitProvider,
 } from './src/ServiceClient';
 // ServiceTransportError is the one error a service call rejects with when it produced NO response —
-// the transport rejected the request, or a declared read's first-contact watchdog abandoned it:
-// reachedServer is false (contact was never confirmed), and a consumer surface reads it to offer a
-// retry in place of what it could not load. The declaration (`'read'` per method at the factory),
-// the read's first-contact bound and the pause before its one redelivery are exported beside it, for
-// consumers that bound their own loading states on the same clock.
+// the transport rejected the request, or a declared method's first-contact watchdog abandoned it —
+// after the client's own redelivery series: reachedServer is false (contact was never confirmed),
+// attempts counts the deliveries, and a consumer surface reads it to offer a retry in place of what it
+// could not load. The declaration per method at the factory (`'read'` | `{ idempotent: true }`), the
+// first-contact bound and the redelivery series' numbers are exported beside it, for consumers that
+// bound their own loading states on the same clock; the idempotency key's header name for a server
+// or a proxy that reads it.
 export { ServiceTransportError } from './src/ServiceTransportError';
-export { READ_CONTACT_TIMEOUT_MS, READ_REDELIVERY_DELAY_MS, ServiceMethodRetry } from './src/ServiceClient';
+export {
+  IDEMPOTENCY_KEY_HEADER,
+  READ_CONTACT_TIMEOUT_MS,
+  REDELIVERY_BASE_MS,
+  REDELIVERY_BUDGET,
+  REDELIVERY_CAP_MS,
+  REDELIVERY_TOTAL_BOUND_MS,
+  ServiceMethodRetry,
+} from './src/ServiceClient';
+// The server's seat for methods declared idempotent: one ledger per server (ServiceExecutor.setIdempotencyLedger),
+// in-process by default; a deployment of several server processes registers one they share.
+export {
+  IDEMPOTENCY_KEY_TTL_MS,
+  IdempotencyLedger,
+  IdempotencyScope,
+  InProcessIdempotencyLedger,
+} from './src/IdempotencyLedger';
+export { ServiceExecutionOptions } from './src/ServiceExecutor';

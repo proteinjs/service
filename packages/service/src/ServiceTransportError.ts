@@ -6,9 +6,9 @@
  * contact was never confirmed, not because the request is known to have been dropped. A response
  * of any status is never this error: the server answered, and its answer is the caller's to read.
  *
- * `attempts` counts the deliveries the client made before giving up (a declared read's one
- * redelivery makes it 2); `stalled` says the watchdog abandoned the request rather than the
- * transport rejecting it. Read by shape ({@link ServiceTransportError.is}), so an error thrown
+ * `attempts` counts the deliveries the client made before giving up (the redelivery series of a
+ * declared method stamps it); `stalled` says the watchdog abandoned the last request rather than
+ * the transport rejecting it. Read by shape ({@link ServiceTransportError.is}), so an error thrown
  * through a duplicate copy of this package is still one.
  */
 export class ServiceTransportError extends Error {

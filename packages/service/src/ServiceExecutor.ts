@@ -1,11 +1,19 @@
 import { randomBytes } from 'crypto';
 import { Interface, Method } from '@proteinjs/reflection';
+import { AuthenticatedUserRepo, getAuthenticatedUserRepo } from '@proteinjs/user-auth';
 import { Service } from './Service';
 import { Logger } from '@proteinjs/logger';
 import { Serializer } from '@proteinjs/serializer';
 import { ServiceAuth } from './ServiceAuth';
 import { isVoidReturnType } from './isVoidReturnType';
 import { ServiceRefusal } from './ServiceRefusal';
+import { IdempotencyLedger, InProcessIdempotencyLedger } from './IdempotencyLedger';
+
+/** What a request carries beside its body that the executor reads. */
+export type ServiceExecutionOptions = {
+  /** The client-minted key of a call declared idempotent (see the client's `IDEMPOTENCY_KEY_HEADER`); absent otherwise. */
+  idempotencyKey?: string;
+};
 
 /**
  * An error whose message is safe to send to the client verbatim. ServiceRouter puts it in the
@@ -28,6 +36,15 @@ export class ServiceError extends Error {
  * ERROR; every other thrown error is a failure, logged at ERROR.
  */
 export class ServiceExecutor {
+  /**
+   * The one ledger every executor records idempotent calls in — in-process until a deployment of
+   * several server processes registers the ledger they share (see {@link setIdempotencyLedger}).
+   */
+  private static idempotencyLedger: IdempotencyLedger = new InProcessIdempotencyLedger();
+
+  /** The caller's identity for the ledger's scope — the same repo every auth gate reads. */
+  private static userRepo?: AuthenticatedUserRepo;
+
   private logger: Logger;
   public deserializedArgs: any;
   private serviceMethodName: string;
@@ -40,7 +57,34 @@ export class ServiceExecutor {
     this.logger = new Logger({ name: this.serviceMethodName });
   }
 
-  async execute(requestBody: any): Promise<any> {
+  /**
+   * ONE slot by design: one ledger per server. A deployment that runs several server processes
+   * registers a ledger they share, so a redelivered idempotent call lands once whichever process
+   * the replay reaches; the default is the in-process ledger (one process).
+   */
+  static setIdempotencyLedger(ledger: IdempotencyLedger): void {
+    ServiceExecutor.idempotencyLedger = ledger;
+  }
+
+  /**
+   * Runs the method on the request's body. A request carrying an idempotency key runs through the
+   * ledger: once per (caller, method, key) inside the key's lifetime, a replay answered with the
+   * recorded result — a redelivered call declared idempotent lands once.
+   */
+  async execute(requestBody: any, options: ServiceExecutionOptions = {}): Promise<any> {
+    const key = options.idempotencyKey;
+    if (key === undefined || key === '') {
+      return this.run(requestBody);
+    }
+    const scope = {
+      principal: ServiceExecutor.principal(),
+      servicePath: `${this._interface.qualifiedName}.${this.method.name}`,
+      key,
+    };
+    return ServiceExecutor.idempotencyLedger.once(scope, () => this.run(requestBody));
+  }
+
+  private async run(requestBody: any): Promise<any> {
     const method = this.service[this.method.name].bind(this.service);
     const deserializedArgs = Serializer.deserialize(requestBody);
     const requestId = randomBytes(4).toString('hex');
@@ -121,6 +165,14 @@ export class ServiceExecutor {
       obj: { functionName: this.serviceMethodName, requestId, return: _return },
     });
     return serializedReturn;
+  }
+
+  /** The caller's email, read through the registered user repo; empty when no repo is registered. */
+  private static principal(): string {
+    if (!ServiceExecutor.userRepo) {
+      ServiceExecutor.userRepo = getAuthenticatedUserRepo();
+    }
+    return ServiceExecutor.userRepo?.getUser().email ?? '';
   }
 
   private doNotAwait() {
