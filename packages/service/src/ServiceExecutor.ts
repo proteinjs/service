@@ -16,6 +16,16 @@ export type ServiceExecutionOptions = {
 };
 
 /**
+ * The environment flag a deployment sets on a server process that runs beside other processes of
+ * the same deployment (several replicas behind one address): `SERVICE_MULTI_PROCESS=true`. Read
+ * once, when the executor loads. Under it the in-process idempotency ledger is not a ledger at all —
+ * a replay landing on another process finds no record — so a keyed request is refused until a
+ * shared ledger is registered (see {@link ServiceExecutor.execute}). Unset, the process is taken to
+ * be the only one, and the in-process ledger serves.
+ */
+export const MULTI_PROCESS_ENV = 'SERVICE_MULTI_PROCESS';
+
+/**
  * An error whose message is safe to send to the client verbatim. ServiceRouter puts it in the
  * response body; any other error type is masked as 'Internal server error'.
  */
@@ -41,6 +51,9 @@ export class ServiceExecutor {
    * several server processes registers the ledger they share (see {@link setIdempotencyLedger}).
    */
   private static idempotencyLedger: IdempotencyLedger = new InProcessIdempotencyLedger();
+
+  /** Whether this process declared itself one of several ({@link MULTI_PROCESS_ENV}) — read once, at load. */
+  private static multiProcess: boolean = ServiceExecutor.declaredMultiProcess(process.env);
 
   /** The caller's identity for the ledger's scope — the same repo every auth gate reads. */
   private static userRepo?: AuthenticatedUserRepo;
@@ -70,11 +83,27 @@ export class ServiceExecutor {
    * Runs the method on the request's body. A request carrying an idempotency key runs through the
    * ledger: once per (caller, method, key) inside the key's lifetime, a replay answered with the
    * recorded result — a redelivered call declared idempotent lands once.
+   *
+   * On a process that declared itself one of several ({@link MULTI_PROCESS_ENV}) while the
+   * registered ledger is still the in-process one, a keyed request is REFUSED — a 501 answer, an
+   * error log entry, the method never run. The in-process ledger cannot see another process's
+   * record, so running the method would be deduplication by luck; the refusal fails loudly where a
+   * silent duplicate would otherwise wait for its first multi-process redelivery.
    */
   async execute(requestBody: any, options: ServiceExecutionOptions = {}): Promise<any> {
     const key = options.idempotencyKey;
     if (key === undefined || key === '') {
       return this.run(requestBody);
+    }
+    if (ServiceExecutor.multiProcess && ServiceExecutor.idempotencyLedger instanceof InProcessIdempotencyLedger) {
+      this.logger.error({
+        message: 'Refused: keyed call without a shared idempotency ledger',
+        obj: { functionName: this.serviceMethodName, status: 501 },
+      });
+      throw new ServiceRefusal(
+        501,
+        `This server cannot deduplicate a keyed call: it runs as one of several processes (${MULTI_PROCESS_ENV}) and no shared idempotency ledger is registered (ServiceExecutor.setIdempotencyLedger), so a redelivery could run the method again on another process — the call was not run.`
+      );
     }
     const scope = {
       principal: ServiceExecutor.principal(),
@@ -248,5 +277,11 @@ export class ServiceExecutor {
       // Circular or otherwise unserializable — the size is not worth a throw.
       return '?B';
     }
+  }
+
+  /** The flag's reading: `true` or `1` declares the process one of several; anything else does not. */
+  private static declaredMultiProcess(env: { [name: string]: string | undefined }): boolean {
+    const value = env[MULTI_PROCESS_ENV]?.trim().toLowerCase();
+    return value === 'true' || value === '1';
   }
 }

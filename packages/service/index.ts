@@ -44,3 +44,6 @@ export {
   InProcessIdempotencyLedger,
 } from './src/IdempotencyLedger';
 export { ServiceExecutionOptions } from './src/ServiceExecutor';
+// The environment flag a multi-process deployment sets (`SERVICE_MULTI_PROCESS=true`): under it the executor
+// refuses a keyed call (501) until a shared ledger is registered — the in-process one cannot see another process.
+export { MULTI_PROCESS_ENV } from './src/ServiceExecutor';
