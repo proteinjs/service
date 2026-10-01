@@ -158,7 +158,8 @@ describe('a method not declared a read', () => {
       await jest.advanceTimersByTimeAsync(READ_CONTACT_TIMEOUT_MS * 4);
       expect(outcome.state).toBe('pending');
       expect(sentRequests()).toHaveLength(1);
-      expect(sentRequests()[0].init.signal).toBeUndefined();
+      // The request carries a signal (the body bound arms it once headers arrive), never pulled here.
+      expect(sentRequests()[0].init.signal.aborted).toBe(false);
     } finally {
       jest.useRealTimers();
     }

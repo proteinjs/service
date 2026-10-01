@@ -78,6 +78,22 @@ export type ServiceMethodRetry = 'read' | { idempotent: true } | number;
 export const READ_CONTACT_TIMEOUT_MS = 15_000;
 
 /**
+ * The body's bound, for every method: once the response headers have arrived, the body must finish
+ * arriving inside it, or the request is abandoned (the same signal aborted — the browser drops the
+ * read) and the delivery counts as a lost answer ({@link ServiceTransportError.answerLost}:
+ * `reachedServer: true, answered: false`). The server composes a service answer in full before it
+ * sends the headers, so the body is one document following them at once; a body still arriving
+ * 30 s after its headers is sitting in a connection that stopped carrying bytes, not waiting on
+ * the server. 30 s rather than the first-contact 15 s: a large answer on the slowest link a page
+ * is used on (a few hundred kbit/s) is a few megabytes in 30 s — more than any one service answer —
+ * so an honest slow download is never abandoned. Every method, declared or not: the headers prove
+ * the server has finished, so no long work is being abandoned here; a redeliverable method
+ * redelivers the lost answer (a read is pure; a keyed write replays under its key) and an
+ * undeclared one surfaces it once, typed.
+ */
+export const RESPONSE_BODY_TIMEOUT_MS = 30_000;
+
+/**
  * The redeliveries after the first delivery — four deliveries at most. The series below needs
  * three pauses (1 s, 2 s, 4 s) to be a series at all, and together they span the few seconds a
  * phone's network handoff takes — the failure a blind redelivery can ride out. Past four, more
@@ -108,8 +124,10 @@ export const REDELIVERY_CAP_MS = 4_000;
  * takes long: the first fresh request after a stall usually lands (the stall was one dead
  * connection), a second stall says the link itself is down, and a third 15-s wait is the last a
  * person reads as "it tried" rather than "it hung". The longest a call can take is the bound plus
- * one watchdog — a redelivery that left just inside the bound and stalled: under a minute. Every
- * delivery that produced no response within the budget and the bound rejects with the typed error.
+ * one watchdog — a redelivery that left just inside the bound and stalled: under a minute on the
+ * first-contact clock, a little over it when the body's bound ({@link RESPONSE_BODY_TIMEOUT_MS})
+ * is the one that fires. Every delivery whose answer was not read within the budget and the bound
+ * rejects with the typed error.
  */
 export const REDELIVERY_TOTAL_BOUND_MS = 45_000;
 
@@ -299,13 +317,16 @@ export class ServiceClient {
   }
 
   /**
-   * The request on the wire — sent ONCE. With `contactTimeoutMs`, the first-contact watchdog: the
-   * request is abandoned (its signal aborted — the browser drops the stalled transfer, so a
-   * redelivery is a fresh request) when no response headers have arrived inside the bound. A
-   * request that produced no response — the watchdog fired, or the transport rejected it — throws a
-   * {@link ServiceTransportError}; a response of any status is the server's answer and is read as
-   * before. `headers` are the call's own (an idempotency key), set after the ambient provider's and
-   * under the reserved ones. The provider's keepalive ask is honoured inside the page's budget
+   * The request on the wire — sent ONCE, under one abort signal from first contact through the
+   * body. With `contactTimeoutMs`, the first-contact watchdog: the request is abandoned (its signal
+   * aborted — the browser drops the stalled transfer, so a redelivery is a fresh request) when no
+   * response headers have arrived inside the bound. Once the headers have arrived, the body's own
+   * bound ({@link RESPONSE_BODY_TIMEOUT_MS}) takes over the same signal. A request whose answer was
+   * not read — the transport rejected it, a watchdog fired, or the connection died under the body —
+   * throws a {@link ServiceTransportError} (`reachedServer` false before the headers, true after);
+   * a response read in full, of any status, is the server's answer and is read as before.
+   * `headers` are the call's own (an idempotency key), set after the ambient provider's and under
+   * the reserved ones. The provider's keepalive ask is honoured inside the page's budget
    * ({@link KEEPALIVE_BUDGET_BYTES}), counted here before the request leaves.
    */
   private async _send(
@@ -318,9 +339,9 @@ export class ServiceClient {
     const provided = ServiceClient.requestInitProvider()?.({ servicePath: absoluteUrl, bodyBytes });
     const keepalive =
       provided?.keepalive === true && bodyBytes + ServiceClient.keepaliveBytesInFlight() <= KEEPALIVE_BUDGET_BYTES;
-    const watchdog = contactTimeoutMs === undefined ? undefined : new AbortController();
+    const watchdog = new AbortController();
     const init: RequestInit = {
-      ...(watchdog ? { signal: watchdog.signal } : {}),
+      signal: watchdog.signal,
       ...(keepalive ? { keepalive: true } : {}),
       method: 'POST',
       body: serializedArgs,
@@ -334,12 +355,13 @@ export class ServiceClient {
       },
     };
     let stalled = false;
-    const timer =
-      watchdog &&
-      setTimeout(() => {
-        stalled = true;
-        watchdog.abort();
-      }, contactTimeoutMs);
+    const contactTimer =
+      contactTimeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            stalled = true;
+            watchdog.abort();
+          }, contactTimeoutMs);
     if (keepalive) {
       ServiceClient.addKeepaliveBytesInFlight(bodyBytes);
     }
@@ -351,23 +373,50 @@ export class ServiceClient {
         ? ServiceTransportError.stalled(absoluteUrl, contactTimeoutMs as number)
         : ServiceTransportError.failed(absoluteUrl, error);
     } finally {
-      if (timer) {
-        clearTimeout(timer);
+      if (contactTimer) {
+        clearTimeout(contactTimer);
       }
       if (keepalive) {
         ServiceClient.addKeepaliveBytesInFlight(-bodyBytes);
       }
     }
-    if (response.status != 200) {
-      throw new Error(await this.errorMessage(response, absoluteUrl));
-    }
 
-    const body = await response.json();
-    if (body.error) {
-      throw new Error(body.error);
+    // The headers are here: the server handled the call. The body's bound arms the same signal.
+    const bodyTimer = setTimeout(() => {
+      stalled = true;
+      watchdog.abort();
+    }, RESPONSE_BODY_TIMEOUT_MS);
+    try {
+      if (response.status != 200) {
+        throw new Error(await this.errorMessage(response, absoluteUrl));
+      }
+      const body = await this.readAnswer(response, absoluteUrl, () => stalled);
+      if (body.error) {
+        throw new Error(body.error);
+      }
+      return body.serializedReturn;
+    } finally {
+      clearTimeout(bodyTimer);
     }
+  }
 
-    return body.serializedReturn;
+  /**
+   * The answer's body. A read the body's bound abandoned, or that the connection died under (the
+   * transport's TypeError), is a lost answer — typed, so a redeliverable method may redeliver it.
+   * A body that arrived but is not JSON stays the parse error it always was: the server answered.
+   */
+  private async readAnswer(response: Response, absoluteUrl: string, bodyStalled: () => boolean): Promise<any> {
+    try {
+      return await response.json();
+    } catch (error) {
+      if (bodyStalled()) {
+        throw ServiceTransportError.answerLost(absoluteUrl, { stalled: true, boundMs: RESPONSE_BODY_TIMEOUT_MS });
+      }
+      if (error instanceof TypeError) {
+        throw ServiceTransportError.answerLost(absoluteUrl, { stalled: false, cause: error });
+      }
+      throw error;
+    }
   }
 
   /**

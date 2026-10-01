@@ -34,6 +34,7 @@ export {
   REDELIVERY_BUDGET,
   REDELIVERY_CAP_MS,
   REDELIVERY_TOTAL_BOUND_MS,
+  RESPONSE_BODY_TIMEOUT_MS,
   ServiceMethodRetry,
 } from './src/ServiceClient';
 // The server's seat for methods declared idempotent: one ledger per server (ServiceExecutor.setIdempotencyLedger),
