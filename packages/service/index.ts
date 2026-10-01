@@ -28,6 +28,7 @@ export {
 export { ServiceTransportError } from './src/ServiceTransportError';
 export {
   IDEMPOTENCY_KEY_HEADER,
+  KEEPALIVE_BUDGET_BYTES,
   READ_CONTACT_TIMEOUT_MS,
   REDELIVERY_BASE_MS,
   REDELIVERY_BUDGET,

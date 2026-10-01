@@ -12,8 +12,11 @@ export type ServiceRequestInit = {
   /**
    * Ask the browser to keep the request alive past the page's teardown (`fetch`'s
    * `keepalive`): a request dispatched while the page is hiding or unloading still reaches
-   * the server. Browsers cap the bytes in flight under keepalive (64 KiB in Chromium); a
-   * request the cap refuses is re-sent once without it (see {@link ServiceClient.send}).
+   * the server. Browsers cap the bytes in flight under keepalive (64 KiB in Chromium), so the
+   * client honours the ask only while the body and its own keepalive bytes already in flight
+   * fit the budget ({@link KEEPALIVE_BUDGET_BYTES}); a request over it goes as an ordinary
+   * request. Either way a request is sent ONCE — a keepalive request the transport rejects is
+   * never re-sent (see {@link ServiceClient.send}).
    */
   keepalive?: boolean;
 };
@@ -114,6 +117,18 @@ export const REDELIVERY_TOTAL_BOUND_MS = 45_000;
 export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 
 /**
+ * The bytes a page may have in flight under `keepalive` at once — the browser's own cap (64 KiB
+ * in Chromium, counted across the page). The client counts its own keepalive request bodies
+ * against it and sets `keepalive` on a request only while the body and the bytes already in
+ * flight fit; a request over the budget goes as an ordinary request instead. A request the
+ * browser refused at the cap used to be re-sent without keepalive, but the refusal and a
+ * connection dying under the request throw the same TypeError, so the re-send was a second
+ * delivery of a request the server may already have handled — it is gone, and the budget is
+ * counted here, before the request leaves.
+ */
+export const KEEPALIVE_BUDGET_BYTES = 64 * 1024;
+
+/**
  * The request-init provider slot lives on the global object, not in module scope: per-package
  * installs can put several live copies of this module in one page (a package's nested
  * node_modules hosts its own), and a page-lifecycle owner setting the slot on one copy while
@@ -121,6 +136,9 @@ export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
  * one page — the same anchoring reflection's SourceRepository uses.
  */
 const REQUEST_INIT_PROVIDER_GLOBAL_KEY = '__proteinjs_service_requestInitProvider';
+
+/** The keepalive bytes in flight, on the same global slot and for the same reason: the browser's cap is the page's, not a module copy's. */
+const KEEPALIVE_IN_FLIGHT_GLOBAL_KEY = '__proteinjs_service_keepaliveBytesInFlight';
 
 const getGlobal = (): any => (typeof window !== 'undefined' ? window : globalThis);
 
@@ -158,7 +176,9 @@ export class ServiceClient {
    * not the call: a page that is hiding or unloading must have every request it dispatches
    * outlive it (`keepalive`), or the writes it queued die with it. The provider is consulted
    * per request, at dispatch, with the service path and the body size, so an owner can decide
-   * per request (e.g. keepalive only under the browser's in-flight cap).
+   * per request; the browser's keepalive cap is the client's own to count
+   * ({@link KEEPALIVE_BUDGET_BYTES}), so an owner asks for keepalive and the client sets it
+   * while the budget allows.
    *
    * ONE slot by design: one owner of page lifecycle per app. Reserved init fields (method,
    * body, headers, credentials, redirect) always win over provider-supplied ones.
@@ -279,13 +299,14 @@ export class ServiceClient {
   }
 
   /**
-   * The request on the wire. With `contactTimeoutMs`, the first-contact watchdog: the request is
-   * abandoned (its signal aborted — the browser drops the stalled transfer, so a redelivery is a
-   * fresh request) when no response headers have arrived inside the bound. A request that produced
-   * no response — the watchdog fired, or the transport rejected it — throws a
+   * The request on the wire — sent ONCE. With `contactTimeoutMs`, the first-contact watchdog: the
+   * request is abandoned (its signal aborted — the browser drops the stalled transfer, so a
+   * redelivery is a fresh request) when no response headers have arrived inside the bound. A
+   * request that produced no response — the watchdog fired, or the transport rejected it — throws a
    * {@link ServiceTransportError}; a response of any status is the server's answer and is read as
    * before. `headers` are the call's own (an idempotency key), set after the ambient provider's and
-   * under the reserved ones.
+   * under the reserved ones. The provider's keepalive ask is honoured inside the page's budget
+   * ({@link KEEPALIVE_BUDGET_BYTES}), counted here before the request leaves.
    */
   private async _send(
     absoluteUrl: string,
@@ -293,12 +314,12 @@ export class ServiceClient {
     contactTimeoutMs?: number,
     headers?: { [headerName: string]: string }
   ) {
-    const provided = ServiceClient.requestInitProvider()?.({
-      servicePath: absoluteUrl,
-      bodyBytes: ServiceClient.utf8ByteLength(serializedArgs),
-    });
+    const bodyBytes = ServiceClient.utf8ByteLength(serializedArgs);
+    const provided = ServiceClient.requestInitProvider()?.({ servicePath: absoluteUrl, bodyBytes });
+    const keepalive =
+      provided?.keepalive === true && bodyBytes + ServiceClient.keepaliveBytesInFlight() <= KEEPALIVE_BUDGET_BYTES;
     const watchdog = contactTimeoutMs === undefined ? undefined : new AbortController();
-    const init = (keepalive: boolean): RequestInit => ({
+    const init: RequestInit = {
       ...(watchdog ? { signal: watchdog.signal } : {}),
       ...(keepalive ? { keepalive: true } : {}),
       method: 'POST',
@@ -311,8 +332,7 @@ export class ServiceClient {
         ...(headers ?? {}),
         'Content-Type': 'application/json',
       },
-    });
-    const keepalive = provided?.keepalive === true;
+    };
     let stalled = false;
     const timer =
       watchdog &&
@@ -320,9 +340,12 @@ export class ServiceClient {
         stalled = true;
         watchdog.abort();
       }, contactTimeoutMs);
+    if (keepalive) {
+      ServiceClient.addKeepaliveBytesInFlight(bodyBytes);
+    }
     let response: Response;
     try {
-      response = await this.firstContact(absoluteUrl, init, keepalive);
+      response = await fetch(new Request(absoluteUrl, init));
     } catch (error) {
       throw stalled
         ? ServiceTransportError.stalled(absoluteUrl, contactTimeoutMs as number)
@@ -330,6 +353,9 @@ export class ServiceClient {
     } finally {
       if (timer) {
         clearTimeout(timer);
+      }
+      if (keepalive) {
+        ServiceClient.addKeepaliveBytesInFlight(-bodyBytes);
       }
     }
     if (response.status != 200) {
@@ -342,25 +368,6 @@ export class ServiceClient {
     }
 
     return body.serializedReturn;
-  }
-
-  /** The fetch that produces the response, with the ONE named fallback (the keepalive cap). */
-  private async firstContact(
-    absoluteUrl: string,
-    init: (keepalive: boolean) => RequestInit,
-    keepalive: boolean
-  ): Promise<Response> {
-    try {
-      return await fetch(new Request(absoluteUrl, init(keepalive)));
-    } catch (error) {
-      // The ONE named fallback: the browser refuses a keepalive request over its in-flight cap
-      // with a TypeError before anything is sent. The request is re-sent as an ordinary one —
-      // the write is not lost to the cap. Any other failure (a network error) is the caller's.
-      if (!keepalive || !(error instanceof TypeError)) {
-        throw error;
-      }
-      return fetch(new Request(absoluteUrl, init(false)));
-    }
   }
 
   /**
@@ -404,6 +411,17 @@ export class ServiceClient {
       hex += (bytes[i] < 0x10 ? '0' : '') + bytes[i].toString(16);
     }
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  /** The page's keepalive bytes in flight (every module copy counts on the one slot). */
+  private static keepaliveBytesInFlight(): number {
+    const held = getGlobal()[KEEPALIVE_IN_FLIGHT_GLOBAL_KEY];
+    return typeof held === 'number' ? held : 0;
+  }
+
+  /** A keepalive request leaving (its body's bytes) or settling (the same bytes, negated). */
+  private static addKeepaliveBytesInFlight(delta: number): void {
+    getGlobal()[KEEPALIVE_IN_FLIGHT_GLOBAL_KEY] = Math.max(0, ServiceClient.keepaliveBytesInFlight() + delta);
   }
 
   /**

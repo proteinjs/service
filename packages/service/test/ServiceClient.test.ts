@@ -1,6 +1,7 @@
 import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
-import { ServiceClient } from '../src/ServiceClient';
+import { KEEPALIVE_BUDGET_BYTES, ServiceClient } from '../src/ServiceClient';
+import { ServiceTransportError } from '../src/ServiceTransportError';
 
 // Node's Request rejects the relative service paths a browser resolves against the page origin
 beforeAll(() => {
@@ -111,21 +112,66 @@ describe('ServiceClient request-init provider (keepalive)', () => {
     expect(init.body).toBe(Serializer.serialize(['a']));
   });
 
-  it('re-sends once WITHOUT keepalive when the browser refuses the keepalive request (the in-flight cap)', async () => {
-    const json = async () => ({ serializedReturn: Serializer.serialize('ok') });
-    global.fetch = jest
-      .fn()
-      .mockImplementationOnce(async () => {
-        throw new TypeError('Failed to fetch: keepalive request exceeds the in-flight limit');
-      })
-      .mockImplementationOnce(async () => ({ status: 200, statusText: 'OK', json })) as any;
+  it('a keepalive request the transport rejects leaves exactly one request on the wire: the typed error, nothing re-sent', async () => {
+    // "Load failed" is what a dying connection throws — the same TypeError as the browser's cap
+    // refusal. A re-send here would be a second delivery of a request the server may have handled.
+    global.fetch = jest.fn(async () => {
+      throw new TypeError('Load failed');
+    }) as any;
     ServiceClient.setRequestInitProvider(() => ({ keepalive: true }));
-    await expect(createClient().send('a')).resolves.toBe('ok');
-    const inits = sentInits();
-    expect(inits).toHaveLength(2);
-    expect(inits[0].keepalive).toBe(true);
-    expect(inits[1].keepalive).toBeUndefined();
-    expect(inits[1].body).toBe(Serializer.serialize(['a']));
+    const error = await createClient()
+      .send('a')
+      .catch((caught: unknown) => caught);
+    expect(ServiceTransportError.is(error)).toBe(true);
+    expect(error).toMatchObject({ reachedServer: false, attempts: 1 });
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(1);
+    expect(sentInits()[0].keepalive).toBe(true);
+  });
+
+  it('the keepalive budget is the browser’s in-flight cap: 64 KiB', () => {
+    expect(KEEPALIVE_BUDGET_BYTES).toBe(64 * 1024);
+  });
+
+  it('a body over the budget is sent once, without keepalive — the browser would refuse it and the write would be lost', async () => {
+    stubFetch({ status: 200, statusText: 'OK', body: { serializedReturn: Serializer.serialize('ok') } });
+    ServiceClient.setRequestInitProvider(() => ({ keepalive: true }));
+    const large = 'x'.repeat(KEEPALIVE_BUDGET_BYTES);
+    await expect(createClient().send(large)).resolves.toBe('ok');
+    expect(sentInits()).toHaveLength(1);
+    expect(sentInits()[0].keepalive).toBeUndefined();
+    expect(sentInits()[0].body).toBe(Serializer.serialize([large]));
+  });
+
+  it('the budget counts the client’s own keepalive bytes in flight: a request that would overrun it goes without keepalive, and the room comes back when one settles', async () => {
+    const pending: Array<(response: any) => void> = [];
+    global.fetch = jest.fn(() => new Promise((resolve) => pending.push(resolve))) as any;
+    ServiceClient.setRequestInitProvider(() => ({ keepalive: true }));
+    const okResponse = () => ({
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ serializedReturn: Serializer.serialize('ok') }),
+    });
+    // Two bodies of 40 KiB: the first fits; the second would put 80 KiB in flight.
+    const body = 'y'.repeat(40 * 1024);
+    const first = createClient().send(body);
+    const second = createClient().send(body);
+    await Promise.resolve();
+    expect(sentInits()).toHaveLength(2);
+    expect(sentInits()[0].keepalive).toBe(true);
+    expect(sentInits()[1].keepalive).toBeUndefined();
+
+    // The first settles: its bytes leave the count, and a third request of the same size fits again.
+    pending[0](okResponse());
+    await expect(first).resolves.toBe('ok');
+    const third = createClient().send(body);
+    await Promise.resolve();
+    expect(sentInits()).toHaveLength(3);
+    expect(sentInits()[2].keepalive).toBe(true);
+
+    pending[1](okResponse());
+    pending[2](okResponse());
+    await expect(second).resolves.toBe('ok');
+    await expect(third).resolves.toBe('ok');
   });
 
   it('a network failure on an ordinary request is the caller’s — never re-sent', async () => {
