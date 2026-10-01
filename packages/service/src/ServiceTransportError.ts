@@ -31,10 +31,19 @@ export class ServiceTransportError extends Error {
   attempts: number;
   /** What the transport threw, when it threw (absent for a stall). */
   readonly cause?: unknown;
+  /** The status a proxy answered with in the server's place (see {@link ServiceTransportError.unserved}); absent otherwise. */
+  readonly status?: number;
 
   constructor(
     message: string,
-    options: { servicePath: string; reachedServer: boolean; stalled: boolean; attempts?: number; cause?: unknown }
+    options: {
+      servicePath: string;
+      reachedServer: boolean;
+      stalled: boolean;
+      attempts?: number;
+      cause?: unknown;
+      status?: number;
+    }
   ) {
     super(message);
     this.name = ServiceTransportError.NAME;
@@ -45,6 +54,19 @@ export class ServiceTransportError extends Error {
     this.stalled = options.stalled;
     this.attempts = options.attempts ?? 1;
     this.cause = options.cause;
+    this.status = options.status;
+  }
+
+  /**
+   * A proxy in front of the server answered in its place — a 502, 503 or 504 with no server answer
+   * in the body — so no server process handled the request. Contact with the SERVER was never
+   * confirmed (`reachedServer` false); the proxy's status rides as `status`.
+   */
+  static unserved(servicePath: string, status: number, statusText: string): ServiceTransportError {
+    return new ServiceTransportError(
+      `No server answered ${servicePath}: a proxy in front of it replied ${status} ${statusText} with no server answer in it`,
+      { servicePath, reachedServer: false, stalled: false, status }
+    );
   }
 
   /** The first-contact watchdog abandoned the request: no response headers inside `boundMs`. */

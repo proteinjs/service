@@ -158,6 +158,25 @@ const REQUEST_INIT_PROVIDER_GLOBAL_KEY = '__proteinjs_service_requestInitProvide
 /** The keepalive bytes in flight, on the same global slot and for the same reason: the browser's cap is the page's, not a module copy's. */
 const KEEPALIVE_IN_FLIGHT_GLOBAL_KEY = '__proteinjs_service_keepaliveBytesInFlight';
 
+/**
+ * The statuses a proxy in front of the server answers with when no server answered — a load
+ * balancer's "bad gateway", "unavailable", "gateway timeout". One of these WITHOUT the router's
+ * body (`{ error: <message> }`) came from the proxy, not from a server process: for a redeliverable
+ * method it is a transport failure ({@link ServiceTransportError.unserved}); an undeclared method
+ * reads it as a verdict, as it always has.
+ */
+const PROXY_STATUSES: readonly number[] = [502, 503, 504];
+
+/** How one delivery is made — set by the method's declared retry (see {@link ServiceMethodRetry}). */
+type Delivery = {
+  /** Whether a delivery whose answer was not read may be sent again (a read; a keyed write). */
+  redeliverable: boolean;
+  /** The first-contact bound, when the delivery has one. */
+  contactTimeoutMs?: number;
+  /** The call's own headers (an idempotency key). */
+  headers?: { [headerName: string]: string };
+};
+
 const getGlobal = (): any => (typeof window !== 'undefined' ? window : globalThis);
 
 export class ServiceClient {
@@ -236,7 +255,7 @@ export class ServiceClient {
     if (typeof this.retry === 'number' && this.retry > 0) {
       return this.deliverWithRetries(args, this.retry);
     }
-    return this.deliver(args);
+    return this.deliver(args, { redeliverable: false });
   }
 
   /**
@@ -251,7 +270,7 @@ export class ServiceClient {
     const startedAt = Date.now();
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.deliver(args, READ_CONTACT_TIMEOUT_MS, headers);
+        return await this.deliver(args, { redeliverable: true, contactTimeoutMs: READ_CONTACT_TIMEOUT_MS, headers });
       } catch (error) {
         if (!ServiceTransportError.is(error)) {
           throw error;
@@ -283,7 +302,7 @@ export class ServiceClient {
     const maxAttempts = 1 + retries;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        return await this.deliver(args);
+        return await this.deliver(args, { redeliverable: false });
       } catch (error) {
         if (attempt === maxAttempts - 1) {
           throw error;
@@ -294,18 +313,14 @@ export class ServiceClient {
   }
 
   /** One delivery: serialize, send, deserialize — logged under its request number. */
-  private async deliver(
-    args: any[],
-    contactTimeoutMs?: number,
-    headers?: { [headerName: string]: string }
-  ): Promise<any> {
+  private async deliver(args: any[], delivery: Delivery): Promise<any> {
     const serializedArgs = Serializer.serialize(args);
     const requestNumber = ServiceClient.requestCounter;
     ServiceClient.requestCounter++;
     console.groupCollapsed(`[#${requestNumber}] Sending service request: ${this.servicePath}, args:`);
     console.log(args);
     console.groupEnd();
-    const serializedReturn = await this._send(this.servicePath, serializedArgs, contactTimeoutMs, headers);
+    const serializedReturn = await this._send(this.servicePath, serializedArgs, delivery);
     const deserializedReturn = Serializer.deserialize(serializedReturn);
     console.groupCollapsed(
       `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
@@ -325,16 +340,14 @@ export class ServiceClient {
    * not read — the transport rejected it, a watchdog fired, or the connection died under the body —
    * throws a {@link ServiceTransportError} (`reachedServer` false before the headers, true after);
    * a response read in full, of any status, is the server's answer and is read as before.
-   * `headers` are the call's own (an idempotency key), set after the ambient provider's and under
-   * the reserved ones. The provider's keepalive ask is honoured inside the page's budget
-   * ({@link KEEPALIVE_BUDGET_BYTES}), counted here before the request leaves.
+   * A 502 / 503 / 504 with no server answer in its body is a proxy's, not the server's: a transport
+   * failure for a redeliverable delivery ({@link ServiceTransportError.unserved}), a verdict for any
+   * other. The delivery's `headers` are the call's own (an idempotency key), set after the ambient
+   * provider's and under the reserved ones. The provider's keepalive ask is honoured inside the
+   * page's budget ({@link KEEPALIVE_BUDGET_BYTES}), counted here before the request leaves.
    */
-  private async _send(
-    absoluteUrl: string,
-    serializedArgs: string,
-    contactTimeoutMs?: number,
-    headers?: { [headerName: string]: string }
-  ) {
+  private async _send(absoluteUrl: string, serializedArgs: string, delivery: Delivery) {
+    const { contactTimeoutMs, headers } = delivery;
     const bodyBytes = ServiceClient.utf8ByteLength(serializedArgs);
     const provided = ServiceClient.requestInitProvider()?.({ servicePath: absoluteUrl, bodyBytes });
     const keepalive =
@@ -388,7 +401,11 @@ export class ServiceClient {
     }, RESPONSE_BODY_TIMEOUT_MS);
     try {
       if (response.status != 200) {
-        throw new Error(await this.errorMessage(response, absoluteUrl));
+        const verdict = await this.readVerdict(response, absoluteUrl);
+        if (delivery.redeliverable && !verdict.fromServer && PROXY_STATUSES.includes(response.status)) {
+          throw ServiceTransportError.unserved(absoluteUrl, response.status, response.statusText);
+        }
+        throw new Error(verdict.message);
       }
       const body = await this.readAnswer(response, absoluteUrl, () => stalled);
       if (body.error) {
@@ -420,20 +437,28 @@ export class ServiceClient {
   }
 
   /**
-   * The server puts the thrown error's message in the response body ({ error: message }).
-   * Older servers send no message in the body; fall back to statusText for those.
+   * A non-200 response's verdict. The server puts the thrown error's message in the response body
+   * ({ error: message }) — the router's shape, `fromServer` true. A body that is not that shape
+   * (older servers sent no message; a proxy's page is not JSON at all) is read as the status text,
+   * `fromServer` false.
    */
-  private async errorMessage(response: Response, absoluteUrl: string): Promise<string> {
+  private async readVerdict(
+    response: Response,
+    absoluteUrl: string
+  ): Promise<{ fromServer: boolean; message: string }> {
     try {
       const body = await response.json();
       if (typeof body?.error === 'string' && body.error) {
-        return body.error;
+        return { fromServer: true, message: body.error };
       }
     } catch (parseError) {
       // body was not JSON; fall through to statusText
     }
 
-    return `Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`;
+    return {
+      fromServer: false,
+      message: `Failed to process service request: ${absoluteUrl}, error: ${response.statusText}`,
+    };
   }
 
   /** The n-th redelivery's pause: full jitter over the capped exponential series (see {@link REDELIVERY_BASE_MS}). */
