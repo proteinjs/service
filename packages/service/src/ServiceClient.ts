@@ -32,9 +32,11 @@ export type ServiceRequestInitProvider = (request: {
 /**
  * How the client may retry a method — the declarer's assertion at the service factory, never
  * inferred from a method's name. Whatever the declaration, the client redelivers ONLY a delivery
- * that produced no response (the transport rejected the request, or the first-contact watchdog
- * abandoned it): a server's answer of any status is never redelivered — the server decided, and a
- * transient fault there is the server's own to retry.
+ * whose answer was not read: the transport rejected the request, a watchdog abandoned it (first
+ * contact, or the body after the headers — {@link RESPONSE_BODY_TIMEOUT_MS}), the connection died
+ * under the body, or a proxy answered in the server's place (a 502 / 503 / 504 with no server
+ * answer in it). A server's answer of any status, read in full, is never redelivered — the server
+ * decided, and a transient fault there is the server's own to retry.
  *
  * - `'read'`: the method reads and answers; a second delivery returns the same truth. Each delivery
  *   is bounded by the first-contact watchdog ({@link READ_CONTACT_TIMEOUT_MS}); a delivery that
@@ -45,20 +47,28 @@ export type ServiceRequestInitProvider = (request: {
  * - `{ idempotent: true }`: the method writes, and a redelivery must not apply it twice — so the
  *   client mints one idempotency key per call and sends it on every delivery of that call
  *   ({@link IDEMPOTENCY_KEY_HEADER}); the server runs the method once per key and answers a replay
- *   with the recorded result (see `IdempotencyLedger`). Delivered under the same watchdog, series,
- *   budget and bound as a read. The ledger's scope is the server's: in-process by default, so a
- *   deployment of several server processes registers a shared ledger (see
- *   `ServiceExecutor.setIdempotencyLedger`) before declaring a method idempotent.
+ *   with the recorded result (see `IdempotencyLedger`). Delivered under the same series, budget,
+ *   total bound and body bound as a read, but with NO first-contact watchdog by default: a
+ *   transport rejection redelivers, while a request still waiting for its headers waits — the
+ *   server does not cancel a method a client abandons, so abandoning a write that honestly takes
+ *   long would replay it CONCURRENTLY with the run still going. A method whose run time is known
+ *   opts in with `contactTimeoutMs` (set from a measured upper bound of the method's own run, not a
+ *   guess), and a delivery with no headers inside it is abandoned and redelivered under the key.
+ *   The ledger's scope is the server's: in-process by default, so a deployment of several server
+ *   processes registers a shared ledger (see `ServiceExecutor.setIdempotencyLedger`) before
+ *   declaring a method idempotent — a multi-process server with the in-process ledger refuses a
+ *   keyed call (see `MULTI_PROCESS_ENV`).
  * - a number: the earlier grammar — the delivery is retried that many times after ANY failure, a
  *   server's verdict included, one second apart. Kept only for the methods already declared with
  *   it; a method whose redelivery is safe declares `'read'` or `{ idempotent: true }` instead, and
  *   the numeric arm is removed once no declaration uses it.
  *
- * Undeclared (the default): one delivery, no first-contact bound, no redelivery. A method that may
+ * Undeclared (the default): one delivery, no bound of any kind, no redelivery. A method that may
  * be doing long work on the server before it answers, or applying a change a second delivery would
- * apply again, stays undeclared.
+ * apply again, stays undeclared. A declared method is never debounced (the factory refuses the pair:
+ * see {@link ServiceClient.refuseDebouncedDeclaration}).
  */
-export type ServiceMethodRetry = 'read' | { idempotent: true } | number;
+export type ServiceMethodRetry = 'read' | { idempotent: true; contactTimeoutMs?: number } | number;
 
 /**
  * The first-contact bound for a declared method: when no response headers have arrived inside it,
@@ -264,10 +274,10 @@ export class ServiceClient {
   /** The delivery under the method's declared retry (see {@link ServiceMethodRetry}). */
   private executeWithRetry(args: any[]): Promise<any> {
     if (this.retry === 'read') {
-      return this.deliverUnderPolicy(args, undefined);
+      return this.deliverUnderPolicy(args, undefined, READ_CONTACT_TIMEOUT_MS);
     }
     if (typeof this.retry === 'object' && this.retry !== null && this.retry.idempotent === true) {
-      return this.deliverUnderPolicy(args, ServiceClient.mintIdempotencyKey());
+      return this.deliverUnderPolicy(args, ServiceClient.mintIdempotencyKey(), this.retry.contactTimeoutMs);
     }
     if (typeof this.retry === 'number' && this.retry > 0) {
       return this.deliverWithRetries(args, this.retry);
@@ -276,18 +286,23 @@ export class ServiceClient {
   }
 
   /**
-   * The policy for a declared method: every delivery under the first-contact watchdog; a delivery
-   * that produced no response is redelivered as a fresh request after a jittered exponential pause,
-   * while the budget and the total bound allow; a response of any status is never redelivered. The
-   * last transport error carries the count of deliveries made. An idempotent method's key rides
-   * every delivery of the call.
+   * The policy for a declared method: every delivery under the first-contact watchdog when the
+   * method has one (`contactTimeoutMs` — a read's is {@link READ_CONTACT_TIMEOUT_MS}; a keyed write
+   * has none unless it opted in) and under the body bound; a delivery whose answer was not read is
+   * redelivered as a fresh request after a jittered exponential pause, while the budget and the
+   * total bound allow; a response of any status is never redelivered. The last transport error
+   * carries the count of deliveries made. An idempotent method's key rides every delivery of the call.
    */
-  private async deliverUnderPolicy(args: any[], idempotencyKey: string | undefined): Promise<any> {
+  private async deliverUnderPolicy(
+    args: any[],
+    idempotencyKey: string | undefined,
+    contactTimeoutMs: number | undefined
+  ): Promise<any> {
     const headers = idempotencyKey === undefined ? undefined : { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey };
     const startedAt = Date.now();
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.deliver(args, { redeliverable: true, contactTimeoutMs: READ_CONTACT_TIMEOUT_MS, headers });
+        return await this.deliver(args, { redeliverable: true, contactTimeoutMs, headers });
       } catch (error) {
         if (!ServiceTransportError.is(error)) {
           throw error;

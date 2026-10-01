@@ -339,6 +339,31 @@ describe('a method declared idempotent — one key per call, the server runs it 
     await createClient('read').send('a');
     expect(sentRequests()[0].init.headers[IDEMPOTENCY_KEY_HEADER]).toBeUndefined();
   });
+
+  it('a keyed delivery has no first-contact watchdog by default: a transport that never answers is waited on, not abandoned', async () => {
+    global.fetch = neverAnswers() as any;
+    const outcome = track(createClient({ idempotent: true }).send('a'));
+    await jest.advanceTimersByTimeAsync(20_000);
+    expect(outcome.state).toBe('pending');
+    expect(sentRequests()).toHaveLength(1);
+    expect(sentRequests()[0].init.signal.aborted).toBe(false);
+  });
+
+  it('the per-method opt-in: { idempotent: true, contactTimeoutMs } bounds first contact at that number, then redelivers under the same key', async () => {
+    seedJitter(0.5); // the first pause: 500 ms
+    global.fetch = neverAnswers() as any;
+    const outcome = track(createClient({ idempotent: true, contactTimeoutMs: 15_000 }).send('a'));
+    await jest.advanceTimersByTimeAsync(15_000 - 1);
+    expect(sentRequests()[0].init.signal.aborted).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(sentRequests()[0].init.signal.aborted).toBe(true);
+    expect(outcome.state).toBe('pending');
+    await jest.advanceTimersByTimeAsync(500);
+    expect(sentRequests()).toHaveLength(2);
+    const keys = sentRequests().map((request) => request.init.headers[IDEMPOTENCY_KEY_HEADER]);
+    expect(keys[1]).toBe(keys[0]);
+    expect(outcome.state).toBe('pending');
+  });
 });
 
 describe('a method not declared', () => {
