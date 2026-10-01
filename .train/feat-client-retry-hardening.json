@@ -1,0 +1,17 @@
+{
+  "branch": "feat/client-retry-hardening",
+  "packages": ["service"],
+  "suites": [
+    "packages/service/test/ServiceClient.test.ts",
+    "packages/service/test/ServiceClientRetryPolicy.test.ts",
+    "packages/service/test/ServiceClientFirstContact.test.ts",
+    "packages/service/test/ServiceClientResponseBody.test.ts",
+    "packages/service/test/ServiceClientGatewayStatus.test.ts",
+    "packages/service/test/ServiceFactoryDebounce.test.ts",
+    "packages/service/test/ServiceExecutorMultiProcess.test.ts",
+    "packages/service/test/ServiceExecutorIdempotency.test.ts",
+    "packages/service/test/ServiceExecutor.test.ts",
+    "packages/service/test/ServiceRefusal.test.ts"
+  ],
+  "removes": []
+}
