@@ -100,7 +100,8 @@ export const REDELIVERY_CAP_MS = 4_000;
 
 /**
  * A redelivery leaves only while less than this has passed since the first delivery left (its own
- * pause counted). Three stalled deliveries at the watchdog's 15 s fit inside it — the one case that
+ * pause counted — checked before the pause and again after it, since a page suspended under the
+ * pause resumes with the clock minutes on). Three stalled deliveries at the watchdog's 15 s fit inside it — the one case that
  * takes long: the first fresh request after a stall usually lands (the stall was one dead
  * connection), a second stall says the link itself is down, and a third 15-s wait is the last a
  * person reads as "it tried" rather than "it hung". The longest a call can take is the bound plus
@@ -226,6 +227,12 @@ export class ServiceClient {
           throw error;
         }
         await ServiceClient.pause(pause);
+        // Checked again on the far side of the pause: a timer fires late when the page was
+        // suspended under it (a phone backgrounded mid-series resumes with the clock minutes on),
+        // and a redelivery that leaves then is past the bound by any clock but the timer's.
+        if (Date.now() - startedAt >= REDELIVERY_TOTAL_BOUND_MS) {
+          throw error;
+        }
       }
     }
   }

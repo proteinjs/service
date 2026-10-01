@@ -235,6 +235,24 @@ describe('a declared read — the backoff series', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
+  it('the bound is re-checked after the pause: a pause the page slept through (the clock 200 s on when the timer fires) sends nothing more', async () => {
+    seedJitter(1); // the first pause: 1 s
+    global.fetch = jest.fn(rejectsAtOnce) as any;
+    const outcome = track(createClient('read').send('a'));
+    await jest.advanceTimersByTimeAsync(0);
+    expect(sentRequests()).toHaveLength(1);
+    expect(outcome.state).toBe('pending');
+
+    // The page is suspended during the pause (a phone backgrounded); on resume the wall clock has
+    // moved 200 s and the overdue pause timer fires at once.
+    jest.setSystemTime(Date.now() + 200_000);
+    await jest.advanceTimersByTimeAsync(REDELIVERY_BASE_MS);
+    expect(sentRequests()).toHaveLength(1);
+    expect(outcome.state).toBe('rejected');
+    expect(outcome.error).toMatchObject({ reachedServer: false, stalled: false, attempts: 1 });
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
   it('the jitter draws the whole pause: a draw of 0 redelivers at once', async () => {
     seedJitter(0);
     global.fetch = jest
