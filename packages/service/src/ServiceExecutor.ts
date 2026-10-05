@@ -43,9 +43,17 @@ export class ServiceError extends Error {
  * counts, byte sizes). Full arg/return dumps live at debug (`LOG_LEVEL=debug` to turn on),
  * correlated to their info entries by requestId. No env flag re-routes payload contents to info.
  * A thrown `ServiceRefusal` (a refusal made on purpose) is a WARN entry with its status, never an
- * ERROR; every other thrown error is a failure, logged at ERROR.
+ * ERROR; every other thrown error is a failure, logged at ERROR. A request whose body is not the
+ * service call envelope (see {@link readEnvelope}) is refused before any of this — ONE WARN entry
+ * carrying the body's shape, no call log, no ERROR: a probe is not this server's failure.
  */
 export class ServiceExecutor {
+  /** The reason a request whose body is not the envelope reads; safe for the wire. */
+  private static readonly NOT_AN_ENVELOPE = 'request body is not a service call envelope';
+
+  /** The most of a refused body's shape that reaches the log — an unknown caller's body can be large. */
+  private static readonly BODY_SHAPE_CAP = 200;
+
   /**
    * The one ledger every executor records idempotent calls in — in-process until a deployment of
    * several server processes registers the ledger they share (see {@link setIdempotencyLedger}).
@@ -80,9 +88,11 @@ export class ServiceExecutor {
   }
 
   /**
-   * Runs the method on the request's body. A request carrying an idempotency key runs through the
-   * ledger: once per (caller, method, key) inside the key's lifetime, a replay answered with the
-   * recorded result — a redelivered call declared idempotent lands once.
+   * Runs the method on the request's body. The body is read as the envelope first — a body that is
+   * not one is refused here (400, see {@link readEnvelope}) before the ledger, the call log and the
+   * auth gate see it. A request carrying an idempotency key runs through the ledger: once per
+   * (caller, method, key) inside the key's lifetime, a replay answered with the recorded result — a
+   * redelivered call declared idempotent lands once.
    *
    * On a process that declared itself one of several ({@link MULTI_PROCESS_ENV}) while the
    * registered ledger is still the in-process one, a keyed request is REFUSED — a 501 answer, an
@@ -91,9 +101,10 @@ export class ServiceExecutor {
    * silent duplicate would otherwise wait for its first multi-process redelivery.
    */
   async execute(requestBody: any, options: ServiceExecutionOptions = {}): Promise<any> {
+    const deserializedArgs = this.readEnvelope(requestBody);
     const key = options.idempotencyKey;
     if (key === undefined || key === '') {
-      return this.run(requestBody);
+      return this.run(deserializedArgs);
     }
     if (ServiceExecutor.multiProcess && ServiceExecutor.idempotencyLedger instanceof InProcessIdempotencyLedger) {
       this.logger.error({
@@ -107,15 +118,14 @@ export class ServiceExecutor {
     }
     const scope = {
       principal: ServiceExecutor.principal(),
-      servicePath: `${this._interface.qualifiedName}.${this.method.name}`,
+      servicePath: this.servicePath(),
       key,
     };
-    return ServiceExecutor.idempotencyLedger.once(scope, () => this.run(requestBody));
+    return ServiceExecutor.idempotencyLedger.once(scope, () => this.run(deserializedArgs));
   }
 
-  private async run(requestBody: any): Promise<any> {
+  private async run(deserializedArgs: any[]): Promise<any> {
     const method = this.service[this.method.name].bind(this.service);
-    const deserializedArgs = Serializer.deserialize(requestBody);
     const requestId = randomBytes(4).toString('hex');
     const startTime = Date.now();
     this.logger.info({
@@ -194,6 +204,40 @@ export class ServiceExecutor {
       obj: { functionName: this.serviceMethodName, requestId, return: _return },
     });
     return serializedReturn;
+  }
+
+  /**
+   * The request's envelope: the serialized args array the client sends (see `ServiceClient`), and
+   * nothing else is a call. A body of any other shape — a scanner's probe, a form post the body
+   * parser left as `{}`, a bare string, an object with an `args` field — is REFUSED: a 400 with a
+   * plain reason, logged ONCE at WARN with the operation and the body's SHAPE (its type and
+   * top-level key names, capped at {@link BODY_SHAPE_CAP} — never its contents: an unknown
+   * caller's body is untrusted and can be large), never at ERROR — a probe is not this server's
+   * failure. The check is "an array" and nothing more: arity and element types are the method's own
+   * business, so a valid call is served exactly as before.
+   */
+  private readEnvelope(requestBody: any): any[] {
+    let deserialized: any;
+    let parses = true;
+    try {
+      deserialized = Serializer.deserialize(requestBody);
+    } catch {
+      parses = false;
+    }
+    if (parses && Array.isArray(deserialized)) {
+      return deserialized;
+    }
+
+    this.logger.warn({
+      message: `Refused: ${ServiceExecutor.NOT_AN_ENVELOPE}`,
+      obj: {
+        functionName: this.serviceMethodName,
+        servicePath: this.servicePath(),
+        status: 400,
+        body: this.describeBody(requestBody, parses, deserialized),
+      },
+    });
+    throw new ServiceRefusal(400, ServiceExecutor.NOT_AN_ENVELOPE);
   }
 
   /** The caller's email, read through the registered user repo; empty when no repo is registered. */
@@ -277,6 +321,38 @@ export class ServiceExecutor {
       // Circular or otherwise unserializable — the size is not worth a throw.
       return '?B';
     }
+  }
+
+  /** The operation's fully qualified path — the ledger's scope and the refused-body log read the same one. */
+  private servicePath(): string {
+    return `${this._interface.qualifiedName}.${this.method.name}`;
+  }
+
+  /**
+   * The shape of a body that was refused as not the envelope — never a value — the whole cut to
+   * {@link BODY_SHAPE_CAP}. A string body is its byte size, then what it parsed to, or that it did
+   * not parse at all; anything else is described as it arrived.
+   */
+  private describeBody(requestBody: any, parses: boolean, deserialized: any): string {
+    let shape: string;
+    if (typeof requestBody === 'string') {
+      const text = `string(${Buffer.byteLength(requestBody, 'utf8')}B)`;
+      shape = parses ? `${text} of ${this.describeShape(deserialized)}` : `${text}, not JSON`;
+    } else {
+      shape = this.describeShape(requestBody);
+    }
+    return shape.length <= ServiceExecutor.BODY_SHAPE_CAP
+      ? shape
+      : `${shape.slice(0, ServiceExecutor.BODY_SHAPE_CAP - 1)}…`;
+  }
+
+  /** An object's type and top-level key NAMES (what a probe looked like); any other value by type. */
+  private describeShape(value: any): string {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return this.describeValue(value);
+    }
+    const keys = Object.keys(value);
+    return `${value.constructor?.name ?? 'Object'}(${keys.length} keys: ${keys.join(', ')})`;
   }
 
   /** The flag's reading: `true` or `1` declares the process one of several; anything else does not. */

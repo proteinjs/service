@@ -94,11 +94,17 @@ describe('service error transport', () => {
       serviceMetadata: { auth: { public: true } },
       doThing: async () => 'never reached',
     } as unknown as Service;
-    const router = createRouter('/service/@test/test/TestService/doThing', createExecutor(service, 'doThing'));
+    const executor = createExecutor(service, 'doThing');
+    // A failure from outside the service-call catch (neither a refusal nor a ServiceError) — a
+    // malformed body no longer serves as the vehicle: that is a 400 at the door now.
+    jest.spyOn(executor, 'execute').mockRejectedValue(new TypeError('failure outside the service call'));
+    const router = createRouter('/service/@test/test/TestService/doThing', executor);
     const { response, sent } = createResponse();
 
-    // malformed request body makes Serializer.deserialize throw outside the executor's service-call catch
-    await router.onRequest({ path: '/service/@test/test/TestService/doThing', body: '{not json' }, response);
+    await router.onRequest(
+      { path: '/service/@test/test/TestService/doThing', body: Serializer.serialize([]) },
+      response
+    );
 
     expect(sent.status).toBe(500);
     expect(sent.body).toEqual({ error: 'Internal server error' });
