@@ -33,6 +33,8 @@ export class ServiceTransportError extends Error {
   readonly cause?: unknown;
   /** The status a proxy answered with in the server's place (see {@link ServiceTransportError.unserved}); absent otherwise. */
   readonly status?: number;
+  /** The server's id for the request whose answer was lost, when its headers named one (`X-Request-Id`); absent otherwise. */
+  readonly requestId?: string;
 
   constructor(
     message: string,
@@ -43,6 +45,7 @@ export class ServiceTransportError extends Error {
       attempts?: number;
       cause?: unknown;
       status?: number;
+      requestId?: string;
     }
   ) {
     super(message);
@@ -55,6 +58,7 @@ export class ServiceTransportError extends Error {
     this.attempts = options.attempts ?? 1;
     this.cause = options.cause;
     this.status = options.status;
+    this.requestId = options.requestId;
   }
 
   /**
@@ -91,7 +95,7 @@ export class ServiceTransportError extends Error {
    */
   static answerLost(
     servicePath: string,
-    options: { stalled: boolean; boundMs?: number; cause?: unknown }
+    options: { stalled: boolean; boundMs?: number; cause?: unknown; requestId?: string }
   ): ServiceTransportError {
     const why = options.stalled
       ? `its body did not finish arriving within ${options.boundMs} ms of its headers`
@@ -101,6 +105,7 @@ export class ServiceTransportError extends Error {
       reachedServer: true,
       stalled: options.stalled,
       cause: options.cause,
+      requestId: options.requestId,
     });
   }
 

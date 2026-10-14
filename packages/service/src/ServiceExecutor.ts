@@ -8,11 +8,25 @@ import { ServiceAuth } from './ServiceAuth';
 import { isVoidReturnType } from './isVoidReturnType';
 import { ServiceRefusal } from './ServiceRefusal';
 import { IdempotencyLedger, InProcessIdempotencyLedger } from './IdempotencyLedger';
+import { InProcessReadCoalescer } from './ReadCoalescer';
 
 /** What a request carries beside its body that the executor reads. */
 export type ServiceExecutionOptions = {
   /** The client-minted key of a call declared idempotent (see the client's `IDEMPOTENCY_KEY_HEADER`); absent otherwise. */
   idempotencyKey?: string;
+  /**
+   * True when the client declared the delivery a read (see the client's `DECLARED_READ_HEADER`):
+   * identical reads from one caller that arrive while one is running share that run (see
+   * `InProcessReadCoalescer`). Absent for every other request — a write never coalesces.
+   */
+  declaredRead?: boolean;
+  /**
+   * The request's id as the server minted it and echoed it on the response (`X-Request-Id`), so the
+   * executor's lines carry the id every other line of the request carries — the load balancer's
+   * line, the server's Started/Finished pair and the method's own lines join on it. A host that
+   * minted no id hands none, and the executor mints one of its own for its lines.
+   */
+  requestId?: string;
 };
 
 /**
@@ -44,6 +58,11 @@ export class ServiceError extends Error {
  * correlated to their info entries by requestId. No env flag re-routes payload contents to info.
  * A thrown `ServiceRefusal` (a refusal made on purpose) is a WARN entry with its status, never an
  * ERROR; every other thrown error is a failure, logged at ERROR.
+ *
+ * The answer is serialized ONCE. The `Returning` line's byte count is read off the string the
+ * serializer produced — never a second pass over the value — and the string itself is what the
+ * router writes as the body (see `ServiceRouter`). A large document answer once crossed three
+ * serialization passes on the event loop per return; it crosses one.
  */
 export class ServiceExecutor {
   /**
@@ -51,6 +70,12 @@ export class ServiceExecutor {
    * several server processes registers the ledger they share (see {@link setIdempotencyLedger}).
    */
   private static idempotencyLedger: IdempotencyLedger = new InProcessIdempotencyLedger();
+
+  /**
+   * The one seat every executor joins declared reads through: a process's own, by design (see
+   * `InProcessReadCoalescer` — it holds runs in flight and nothing else, so there is nothing to share).
+   */
+  private static readCoalescer = new InProcessReadCoalescer();
 
   /** Whether this process declared itself one of several ({@link MULTI_PROCESS_ENV}) — read once, at load. */
   private static multiProcess: boolean = ServiceExecutor.declaredMultiProcess(process.env);
@@ -89,34 +114,87 @@ export class ServiceExecutor {
    * error log entry, the method never run. The in-process ledger cannot see another process's
    * record, so running the method would be deduplication by luck; the refusal fails loudly where a
    * silent duplicate would otherwise wait for its first multi-process redelivery.
+   *
+   * A request the client declared a read joins a run of the same read already in flight for the
+   * same caller, when there is one (see `InProcessReadCoalescer`), and runs the method otherwise.
+   * Every other request runs the method.
    */
   async execute(requestBody: any, options: ServiceExecutionOptions = {}): Promise<any> {
     const key = options.idempotencyKey;
-    if (key === undefined || key === '') {
-      return this.run(requestBody);
+    if (key !== undefined && key !== '') {
+      if (ServiceExecutor.multiProcess && ServiceExecutor.idempotencyLedger instanceof InProcessIdempotencyLedger) {
+        this.logger.error({
+          message: 'Refused: keyed call without a shared idempotency ledger',
+          obj: { functionName: this.serviceMethodName, status: 501 },
+        });
+        throw new ServiceRefusal(
+          501,
+          `This server cannot deduplicate a keyed call: it runs as one of several processes (${MULTI_PROCESS_ENV}) and no shared idempotency ledger is registered (ServiceExecutor.setIdempotencyLedger), so a redelivery could run the method again on another process — the call was not run.`
+        );
+      }
+      const scope = {
+        principal: ServiceExecutor.principal(),
+        servicePath: `${this._interface.qualifiedName}.${this.method.name}`,
+        key,
+      };
+      return ServiceExecutor.idempotencyLedger.once(scope, () => this.run(requestBody, options.requestId));
     }
-    if (ServiceExecutor.multiProcess && ServiceExecutor.idempotencyLedger instanceof InProcessIdempotencyLedger) {
-      this.logger.error({
-        message: 'Refused: keyed call without a shared idempotency ledger',
-        obj: { functionName: this.serviceMethodName, status: 501 },
-      });
-      throw new ServiceRefusal(
-        501,
-        `This server cannot deduplicate a keyed call: it runs as one of several processes (${MULTI_PROCESS_ENV}) and no shared idempotency ledger is registered (ServiceExecutor.setIdempotencyLedger), so a redelivery could run the method again on another process — the call was not run.`
-      );
+    if (options.declaredRead === true) {
+      return this.joinOrRun(requestBody, options.requestId);
     }
+    return this.run(requestBody, options.requestId);
+  }
+
+  /**
+   * A declared read: the run in flight for the same caller, method and arguments is joined — this
+   * delivery logs its own `Calling` and `Returning` lines, marked `coalesced`, and settles exactly as
+   * the run it joined settles — or the method runs and is recorded in flight until it settles.
+   */
+  private async joinOrRun(requestBody: any, handedRequestId: string | undefined): Promise<any> {
     const scope = {
       principal: ServiceExecutor.principal(),
       servicePath: `${this._interface.qualifiedName}.${this.method.name}`,
-      key,
+      body: typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody),
     };
-    return ServiceExecutor.idempotencyLedger.once(scope, () => this.run(requestBody));
+    const { settled, joined } = ServiceExecutor.readCoalescer.join(scope, () => this.run(requestBody, handedRequestId));
+    if (!joined) {
+      return settled;
+    }
+
+    const requestId = ServiceExecutor.requestId(handedRequestId);
+    const startTime = Date.now();
+    this.logger.info({
+      message: `Calling (joined a run in flight)`,
+      obj: { functionName: this.serviceMethodName, requestId, coalesced: true },
+    });
+    let serializedReturn: string | undefined;
+    try {
+      serializedReturn = await settled;
+    } catch (error: any) {
+      // The run's own failure or refusal was logged by the run; this delivery's line names its share.
+      this.logger.warn({
+        message: `Failed (joined a run in flight)`,
+        obj: { functionName: this.serviceMethodName, requestId, durationMs: Date.now() - startTime, coalesced: true },
+      });
+      throw error;
+    }
+    this.logger.info({
+      message: `Returning`,
+      obj: {
+        functionName: this.serviceMethodName,
+        requestId,
+        durationMs: Date.now() - startTime,
+        bytes: ServiceExecutor.byteLength(serializedReturn),
+        coalesced: true,
+      },
+    });
+    return serializedReturn;
   }
 
-  private async run(requestBody: any): Promise<any> {
+  private async run(requestBody: any, handedRequestId: string | undefined): Promise<any> {
     const method = this.service[this.method.name].bind(this.service);
     const deserializedArgs = Serializer.deserialize(requestBody);
-    const requestId = randomBytes(4).toString('hex');
+    const requestId = ServiceExecutor.requestId(handedRequestId);
     const startTime = Date.now();
     this.logger.info({
       message: `Calling`,
@@ -179,14 +257,19 @@ export class ServiceExecutor {
       return undefined;
     }
 
-    const serializedReturn = Serializer.serialize(_return);
+    const serializeStart = Date.now();
+    const serializedReturn: string | undefined = Serializer.serialize(_return);
+    const serializeMs = Date.now() - serializeStart;
     this.logger.info({
       message: `Returning`,
       obj: {
         functionName: this.serviceMethodName,
         requestId,
         durationMs: Date.now() - startTime,
-        return: this.describeValue(_return),
+        serializeMs,
+        bytes: ServiceExecutor.byteLength(serializedReturn),
+        coalesced: false,
+        return: this.describeReturn(_return, serializedReturn),
       },
     });
     this.logger.debug({
@@ -202,6 +285,11 @@ export class ServiceExecutor {
       ServiceExecutor.userRepo = getAuthenticatedUserRepo();
     }
     return ServiceExecutor.userRepo?.getUser().email ?? '';
+  }
+
+  /** The id the host minted for the request; one of the executor's own when the host minted none. */
+  private static requestId(handed: string | undefined): string {
+    return handed ?? randomBytes(4).toString('hex');
   }
 
   private doNotAwait() {
@@ -240,9 +328,10 @@ export class ServiceExecutor {
   }
 
   /**
-   * A payload-free shape description: type, element/key counts, and serialized byte size.
-   * Never values, key names, or any other content — these summaries are all that may reach
-   * info-level logs.
+   * A payload-free shape description: type and element/key counts, a string's byte size. Never
+   * values, key names, or any other content — these summaries are all that may reach info-level
+   * logs. An object's or array's byte size is not measured here: that would be a serialization
+   * pass of its own over the value.
    */
   private describeValue(value: any): string {
     if (value === null) {
@@ -254,7 +343,7 @@ export class ServiceExecutor {
     }
 
     if (Array.isArray(value)) {
-      return `Array(${value.length} items, ${this.byteSize(value)})`;
+      return `Array(${value.length} items)`;
     }
 
     if (typeof value === 'string') {
@@ -263,20 +352,46 @@ export class ServiceExecutor {
 
     if (typeof value === 'object') {
       const className = value.constructor?.name ?? 'Object';
-      return `${className}(${Object.keys(value).length} keys, ${this.byteSize(value)})`;
+      return `${className}(${Object.keys(value).length} keys)`;
     }
 
     // number, boolean, bigint, function, symbol: the type alone — a value can be user content.
     return typeof value;
   }
 
-  private byteSize(value: any): string {
-    try {
-      return `${Buffer.byteLength(JSON.stringify(value) ?? '', 'utf8')}B`;
-    } catch {
-      // Circular or otherwise unserializable — the size is not worth a throw.
-      return '?B';
+  /**
+   * The return's shape description, with the byte size of the answer as it leaves — read off the
+   * serialized string the answer IS, never a second serialization of the value.
+   */
+  private describeReturn(value: any, serialized: string | undefined): string {
+    const bytes = `${ServiceExecutor.byteLength(serialized)}B`;
+    if (value === null) {
+      return 'null';
     }
+
+    if (value === undefined) {
+      return 'undefined';
+    }
+
+    if (Array.isArray(value)) {
+      return `Array(${value.length} items, ${bytes})`;
+    }
+
+    if (typeof value === 'string') {
+      return `string(${bytes})`;
+    }
+
+    if (typeof value === 'object') {
+      const className = value.constructor?.name ?? 'Object';
+      return `${className}(${Object.keys(value).length} keys, ${bytes})`;
+    }
+
+    return typeof value;
+  }
+
+  /** The bytes a serialized answer puts on the wire (UTF-8); none for an answer with no text. */
+  private static byteLength(serialized: string | undefined): number {
+    return serialized === undefined ? 0 : Buffer.byteLength(serialized, 'utf8');
   }
 
   /** The flag's reading: `true` or `1` declares the process one of several; anything else does not. */

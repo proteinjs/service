@@ -118,15 +118,22 @@ describe('info level: summary envelope only, zero payload contents', () => {
     const returning = entries.find((e) => e.message === 'Returning');
     expect(calling?.obj?.functionName).toBe('TestService.doThing');
     expect(calling?.obj?.requestId).toMatch(/^[0-9a-f]{8}$/);
-    // Shapes, not contents: one summary per arg (a string and a 2-key object).
+    // Shapes, not contents: one summary per arg (a string and a 2-key object). An object's byte size
+    // is not measured — that would be a serialization pass of its own; the answer's is (below).
     expect(calling?.obj?.args).toEqual([
       expect.stringMatching(/^string\(\d+B\)$/),
-      expect.stringMatching(/^Object\(2 keys, \d+B\)$/),
+      expect.stringMatching(/^Object\(2 keys\)$/),
     ]);
     expect(returning?.obj?.functionName).toBe('TestService.doThing');
     expect(returning?.obj?.requestId).toBe(calling?.obj?.requestId);
     expect(typeof returning?.obj?.durationMs).toBe('number');
     expect(returning?.obj?.return).toMatch(/^Object\(2 keys, \d+B\)$/);
+    // The answer's size and cost, read off the one serialized string; not a joined delivery.
+    expect(typeof returning?.obj?.serializeMs).toBe('number');
+    expect(returning?.obj?.bytes).toBe(
+      Buffer.byteLength(Serializer.serialize({ email: SECRET_EMAIL, content: SECRET_RETURN }), 'utf8')
+    );
+    expect(returning?.obj?.coalesced).toBe(false);
   });
 
   it('no env flag re-routes payloads to info (DETAILED_SERVICE_LOGS is dead)', async () => {

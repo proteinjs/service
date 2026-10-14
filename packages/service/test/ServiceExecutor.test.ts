@@ -36,6 +36,7 @@ const createResponse = () => {
       sent.body = body;
       return response;
     },
+    getHeader: () => undefined,
   };
   return { response, sent };
 };

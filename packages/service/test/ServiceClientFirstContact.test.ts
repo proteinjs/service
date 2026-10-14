@@ -22,6 +22,7 @@ const createClient = (retry?: ServiceMethodRetry) => {
 
 const okResponse = () => ({
   status: 200,
+  headers: new Headers({ 'content-type': 'application/json' }),
   statusText: 'OK',
   json: async () => ({ serializedReturn: Serializer.serialize('ok') }),
 });

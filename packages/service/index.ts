@@ -27,6 +27,7 @@ export {
 // or a proxy that reads it.
 export { ServiceTransportError } from './src/ServiceTransportError';
 export {
+  DECLARED_READ_HEADER,
   IDEMPOTENCY_KEY_HEADER,
   KEEPALIVE_BUDGET_BYTES,
   READ_CONTACT_TIMEOUT_MS,
@@ -34,9 +35,14 @@ export {
   REDELIVERY_BUDGET,
   REDELIVERY_CAP_MS,
   REDELIVERY_TOTAL_BOUND_MS,
+  REQUEST_ID_HEADER,
   RESPONSE_BODY_TIMEOUT_MS,
+  SERIALIZED_RETURN_MEDIA_TYPE,
   ServiceMethodRetry,
 } from './src/ServiceClient';
+// The server's seat for declared reads: identical reads from one caller share a run IN FLIGHT and nothing
+// else (no result is kept past the run's settlement). One process's by design.
+export { InProcessReadCoalescer, ReadScope } from './src/ReadCoalescer';
 // The server's seat for methods declared idempotent: one ledger per server (ServiceExecutor.setIdempotencyLedger),
 // in-process by default; a deployment of several server processes registers one they share.
 export {

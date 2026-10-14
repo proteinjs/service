@@ -53,6 +53,7 @@ const request = async (router: ServiceRouter, args: any[], key?: string) => {
       sent.body = body;
       return response;
     },
+    getHeader: () => undefined,
   };
   await router.onRequest(
     {

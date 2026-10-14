@@ -39,6 +39,7 @@ const abortError = () => Object.assign(new Error('The operation was aborted.'), 
 
 const okResponse = () => ({
   status: 200,
+  headers: new Headers({ 'content-type': 'application/json' }),
   statusText: 'OK',
   json: async () => ({ serializedReturn: Serializer.serialize('ok') }),
 });
@@ -47,6 +48,7 @@ const okResponse = () => ({
 const headersThenHangingBody = (request: any) =>
   Promise.resolve({
     status: 200,
+    headers: new Headers({ 'content-type': 'application/json' }),
     statusText: 'OK',
     json: () =>
       new Promise((unused, reject) => {
@@ -58,6 +60,7 @@ const headersThenHangingBody = (request: any) =>
 const headersThenDeadBody = () =>
   Promise.resolve({
     status: 200,
+    headers: new Headers({ 'content-type': 'application/json' }),
     statusText: 'OK',
     json: async () => {
       throw new TypeError('Load failed');
@@ -183,6 +186,7 @@ describe('the body bound', () => {
     global.fetch = jest.fn(() =>
       Promise.resolve({
         status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
         statusText: 'OK',
         json: () =>
           new Promise((resolve) => setTimeout(() => resolve({ serializedReturn: Serializer.serialize('ok') }), 100)),
@@ -198,6 +202,7 @@ describe('the body bound', () => {
     global.fetch = jest.fn(() =>
       Promise.resolve({
         status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
         statusText: 'OK',
         json: async () => {
           throw new SyntaxError('Unexpected token < in JSON');

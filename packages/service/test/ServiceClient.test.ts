@@ -20,7 +20,14 @@ const createClient = () => {
 
 const stubFetch = (response: { status: number; statusText: string; body?: any; json?: () => Promise<any> }) => {
   const json = response.json ?? (async () => response.body);
-  global.fetch = jest.fn(async () => ({ status: response.status, statusText: response.statusText, json })) as any;
+  // An earlier server's answer: the envelope under application/json.
+  const headers = new Headers({ 'content-type': 'application/json' });
+  global.fetch = jest.fn(async () => ({
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+    json,
+  })) as any;
 };
 
 describe('ServiceClient error parsing', () => {
@@ -148,6 +155,7 @@ describe('ServiceClient request-init provider (keepalive)', () => {
     ServiceClient.setRequestInitProvider(() => ({ keepalive: true }));
     const okResponse = () => ({
       status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
       statusText: 'OK',
       json: async () => ({ serializedReturn: Serializer.serialize('ok') }),
     });

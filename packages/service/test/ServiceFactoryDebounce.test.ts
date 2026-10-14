@@ -63,6 +63,7 @@ describe('an undeclared debounced method', () => {
   it('keeps its road: the call leaves after the wait, the caller is handed nothing to await', async () => {
     global.fetch = jest.fn(async () => ({
       status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
       statusText: 'OK',
       json: async () => ({ serializedReturn: Serializer.serialize('ok') }),
     })) as any;

@@ -3,6 +3,7 @@ import { Serializer } from '@proteinjs/serializer';
 import { Debouncer } from '@proteinjs/util';
 import { isVoidReturnType } from './isVoidReturnType';
 import { ServiceTransportError } from './ServiceTransportError';
+import { Logger } from '@proteinjs/logger';
 
 /** See {@link ServiceClient.setDefaultHeadersProvider}. */
 export type ServiceRequestHeadersProvider = () => { [headerName: string]: string };
@@ -145,6 +146,31 @@ export const REDELIVERY_TOTAL_BOUND_MS = 45_000;
 export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 
 /**
+ * The request header a delivery of a method declared `'read'` carries (`true`): the server joins
+ * identical reads from one caller that arrive while one is running — a redelivery of a read still
+ * running on the process it reaches takes that run instead of starting another (see the server's
+ * `InProcessReadCoalescer`). Declared reads only: a write never carries it, so a write never joins.
+ */
+export const DECLARED_READ_HEADER = 'Service-Declared-Read';
+
+/**
+ * The media type of a service answer written as the serialized return itself — the serializer's
+ * text as the whole response body. The client names it in every request's `Accept`, and a server
+ * that knows the form answers in it; a server built before the form answers as it always did, an
+ * object wrapping the string (`{ serializedReturn }`) under `application/json`, which the client
+ * still reads. Either side may be the older one for a release: the form is negotiated per request.
+ */
+export const SERIALIZED_RETURN_MEDIA_TYPE = 'application/vnd.proteinjs.serialized+json';
+
+/**
+ * The response header carrying the server's id for the request — the id its own log lines carry
+ * (the Started/Finished pair, the method's Calling/Returning lines). The client reads it off the
+ * headers it received, so a redelivery after the body's bound names the server-side request whose
+ * answer was lost, and the two sides' lines join on one id.
+ */
+export const REQUEST_ID_HEADER = 'X-Request-Id';
+
+/**
  * The bytes a page may have in flight under `keepalive` at once — the browser's own cap (64 KiB
  * in Chromium, counted across the page). The client counts its own keepalive request bodies
  * against it and sets `keepalive` on a request only while the body and the bytes already in
@@ -185,12 +211,23 @@ type Delivery = {
   contactTimeoutMs?: number;
   /** The call's own headers (an idempotency key). */
   headers?: { [headerName: string]: string };
+  /** Whether the method is declared `'read'`: the delivery carries {@link DECLARED_READ_HEADER}. */
+  declaredRead?: boolean;
 };
 
 const getGlobal = (): any => (typeof window !== 'undefined' ? window : globalThis);
 
 export class ServiceClient {
   private static requestCounter = 1;
+
+  /**
+   * The client's own log line per redelivery (`Redelivering`, at WARN): the method, which delivery
+   * leaves next of how many, why the last one was abandoned — a first-contact timeout, the body's
+   * timeout, or the network — the milliseconds since the first delivery left, and the server's
+   * request id when the lost answer's headers had arrived. A page that ships its warnings to the
+   * server reports every redelivery it makes, so a storm of them is measured where it starts.
+   */
+  private static logger = new Logger({ name: 'ServiceClient' });
 
   /** The jitter's draw in [0, 1) — the one source of randomness in the redelivery series. */
   private static random: () => number = Math.random;
@@ -274,10 +311,10 @@ export class ServiceClient {
   /** The delivery under the method's declared retry (see {@link ServiceMethodRetry}). */
   private executeWithRetry(args: any[]): Promise<any> {
     if (this.retry === 'read') {
-      return this.deliverUnderPolicy(args, undefined, READ_CONTACT_TIMEOUT_MS);
+      return this.deliverUnderPolicy(args, undefined, READ_CONTACT_TIMEOUT_MS, true);
     }
     if (typeof this.retry === 'object' && this.retry !== null && this.retry.idempotent === true) {
-      return this.deliverUnderPolicy(args, ServiceClient.mintIdempotencyKey(), this.retry.contactTimeoutMs);
+      return this.deliverUnderPolicy(args, ServiceClient.mintIdempotencyKey(), this.retry.contactTimeoutMs, false);
     }
     if (typeof this.retry === 'number' && this.retry > 0) {
       return this.deliverWithRetries(args, this.retry);
@@ -296,13 +333,14 @@ export class ServiceClient {
   private async deliverUnderPolicy(
     args: any[],
     idempotencyKey: string | undefined,
-    contactTimeoutMs: number | undefined
+    contactTimeoutMs: number | undefined,
+    declaredRead: boolean
   ): Promise<any> {
     const headers = idempotencyKey === undefined ? undefined : { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey };
     const startedAt = Date.now();
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.deliver(args, { redeliverable: true, contactTimeoutMs, headers });
+        return await this.deliver(args, { redeliverable: true, contactTimeoutMs, headers, declaredRead });
       } catch (error) {
         if (!ServiceTransportError.is(error)) {
           throw error;
@@ -315,6 +353,17 @@ export class ServiceClient {
         if (Date.now() + pause - startedAt >= REDELIVERY_TOTAL_BOUND_MS) {
           throw error;
         }
+        ServiceClient.logger.warn({
+          message: 'Redelivering',
+          obj: {
+            servicePath: this.servicePath,
+            attempt: attempt + 1,
+            of: REDELIVERY_BUDGET + 1,
+            reason: ServiceClient.redeliveryReason(error),
+            elapsedMs: Date.now() - startedAt,
+            ...(error.requestId === undefined ? {} : { requestId: error.requestId }),
+          },
+        });
         await ServiceClient.pause(pause);
         // Checked again on the far side of the pause: a timer fires late when the page was
         // suspended under it (a phone backgrounded mid-series resumes with the clock minutes on),
@@ -353,7 +402,8 @@ export class ServiceClient {
     console.log(args);
     console.groupEnd();
     const serializedReturn = await this._send(this.servicePath, serializedArgs, delivery);
-    const deserializedReturn = Serializer.deserialize(serializedReturn);
+    // An answer with no text is an undefined return (a method that returned nothing).
+    const deserializedReturn = serializedReturn === undefined ? undefined : Serializer.deserialize(serializedReturn);
     console.groupCollapsed(
       `[#${requestNumber}] Received service response: ${this.servicePath}, return:${isVoidReturnType(this.serviceMethod) ? ' (void)' : ''}`
     );
@@ -400,7 +450,9 @@ export class ServiceClient {
         // Provider-supplied client-context headers first so reserved headers always win.
         ...(ServiceClient.defaultHeadersProvider ? ServiceClient.defaultHeadersProvider() : {}),
         ...(headers ?? {}),
+        ...(delivery.declaredRead ? { [DECLARED_READ_HEADER]: 'true' } : {}),
         'Content-Type': 'application/json',
+        Accept: SERIALIZED_RETURN_MEDIA_TYPE,
       },
     };
     let stalled = false;
@@ -446,13 +498,7 @@ export class ServiceClient {
         }
         throw new Error(verdict.message);
       }
-      const body = delivery.redeliverable
-        ? await this.readAnswer(response, absoluteUrl, () => stalled)
-        : await response.json();
-      if (body.error) {
-        throw new Error(body.error);
-      }
-      return body.serializedReturn;
+      return await this.readAnswer(response, absoluteUrl, delivery.redeliverable, () => stalled);
     } finally {
       if (bodyTimer) {
         clearTimeout(bodyTimer);
@@ -461,22 +507,64 @@ export class ServiceClient {
   }
 
   /**
-   * The answer's body. A read the body's bound abandoned, or that the connection died under (the
-   * transport's TypeError), is a lost answer — typed, so a redeliverable method may redeliver it.
-   * A body that arrived but is not JSON stays the parse error it always was: the server answered.
+   * The answer: the serialized return, as the server wrote it. Under {@link SERIALIZED_RETURN_MEDIA_TYPE}
+   * the body IS the serialized text (an empty body is an answer with no text — an undefined
+   * return); under any other type the body is an earlier server's envelope, `{ serializedReturn }`,
+   * or its `{ error }`. For a redeliverable delivery a body the bound abandoned, or that the
+   * connection died under (the transport's TypeError), is a lost answer — typed, carrying the
+   * server's request id when the headers named one, so the method may redeliver it; an undeclared
+   * method's body read fails as it always did. A body that arrived but is not what the type says
+   * stays the parse error it always was: the server answered.
    */
-  private async readAnswer(response: Response, absoluteUrl: string, bodyStalled: () => boolean): Promise<any> {
+  private async readAnswer(
+    response: Response,
+    absoluteUrl: string,
+    redeliverable: boolean,
+    bodyStalled: () => boolean
+  ): Promise<string | undefined> {
+    const contentType = response.headers.get('content-type') ?? '';
+    const serializedForm = contentType.includes(SERIALIZED_RETURN_MEDIA_TYPE);
+    let body: any;
     try {
-      return await response.json();
+      body = serializedForm ? await response.text() : await response.json();
     } catch (error) {
+      if (!redeliverable) {
+        throw error;
+      }
+      const requestId = ServiceClient.requestIdOf(response);
       if (bodyStalled()) {
-        throw ServiceTransportError.answerLost(absoluteUrl, { stalled: true, boundMs: RESPONSE_BODY_TIMEOUT_MS });
+        throw ServiceTransportError.answerLost(absoluteUrl, {
+          stalled: true,
+          boundMs: RESPONSE_BODY_TIMEOUT_MS,
+          requestId,
+        });
       }
       if (error instanceof TypeError) {
-        throw ServiceTransportError.answerLost(absoluteUrl, { stalled: false, cause: error });
+        throw ServiceTransportError.answerLost(absoluteUrl, { stalled: false, cause: error, requestId });
       }
       throw error;
     }
+    if (serializedForm) {
+      return body === '' ? undefined : body;
+    }
+    if (body.error) {
+      throw new Error(body.error);
+    }
+    return body.serializedReturn;
+  }
+
+  /** The server's request id off the response headers ({@link REQUEST_ID_HEADER}); none when the server set none. */
+  private static requestIdOf(response: Response): string | undefined {
+    const value = response.headers.get(REQUEST_ID_HEADER);
+    return value === null || value === '' ? undefined : value;
+  }
+
+  /** Why the last delivery was abandoned, in the log line's three words. */
+  private static redeliveryReason(error: ServiceTransportError): 'first-contact timeout' | 'body timeout' | 'network' {
+    if (!error.stalled) {
+      return 'network';
+    }
+    return error.reachedServer ? 'body timeout' : 'first-contact timeout';
   }
 
   /**

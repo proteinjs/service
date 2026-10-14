@@ -52,6 +52,7 @@ const seedJitter = (draw: number) => {
 
 const okResponse = () => ({
   status: 200,
+  headers: new Headers({ 'content-type': 'application/json' }),
   statusText: 'OK',
   json: async () => ({ serializedReturn: Serializer.serialize('ok') }),
 });
@@ -118,22 +119,35 @@ const transportTo = (router: ServiceRouter, dropAnswers: number) =>
     for (const name of Object.keys(request.init.headers ?? {})) {
       headers[name.toLowerCase()] = request.init.headers[name];
     }
-    const sent: { status?: number; body?: any } = {};
+    const sent: { status?: number; type?: string; body?: any } = {};
     const response: any = {
       status(code: number) {
         sent.status = code;
+        return response;
+      },
+      type(mediaType: string) {
+        sent.type = mediaType;
         return response;
       },
       send(body: any) {
         sent.body = body;
         return response;
       },
+      getHeader: () => undefined,
     };
     await router.onRequest({ path: request.url, body: request.init.body, headers }, response);
     if (dropAnswers-- > 0) {
       throw new TypeError('Failed to fetch');
     }
-    return { status: sent.status ?? 200, statusText: 'OK', json: async () => sent.body };
+    // The answer as the wire carries it: the serialized text under its own type when the client asked
+    // for that form, the envelope under application/json otherwise.
+    return {
+      status: sent.status ?? 200,
+      statusText: 'OK',
+      headers: new Headers({ 'content-type': sent.type ?? 'application/json' }),
+      json: async () => sent.body,
+      text: async () => sent.body,
+    };
   });
 
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

@@ -61,6 +61,7 @@ const call = async (router: ServiceRouter) => {
       sent.body = body;
       return response;
     },
+    getHeader: () => undefined,
   };
   await router.onRequest({ path: SERVICE_PATH, body: Serializer.serialize([SECRET_ARG]) }, response);
   return sent;
