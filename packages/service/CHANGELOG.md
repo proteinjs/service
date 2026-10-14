@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.10.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.9.0...@proteinjs/service@1.10.0) (2026-10-14)
+
+
+### Features
+
+* **service:** serialize once, the answer as the body, declared reads coalesced, every redelivery logged ([00c0c73](https://github.com/proteinjs/service/commit/00c0c7311edac5cb3497b4a8e4e789ab52bc95a1))
+
+
+
+
+
 # [1.9.0](https://github.com/proteinjs/service/compare/@proteinjs/service@1.8.0...@proteinjs/service@1.9.0) (2026-10-01)
 
 
