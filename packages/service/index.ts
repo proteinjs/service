@@ -6,7 +6,9 @@ export * from './src/Service';
 // outside a service method body (e.g. @proteinjs/db TableServiceAuth) and want the same pass-through.
 export { ServiceError } from './src/ServiceExecutor';
 // ServiceRefusal is a refusal an operation throws on purpose (403 / 404 / 409 / 400): the router
-// answers with its status and the executor logs it at WARN — a refusal, never a failure.
+// answers with its status and the executor logs it at WARN — a refusal, never a failure — and the
+// client throws it again, typed, for a 403 / 404 / 409 / 501 answer in the router's shape
+// (ServiceRefusal.fromWire), so a surface reads the server's verdict about the thing by shape.
 export { ServiceRefusal, ServiceRefusalStatus } from './src/ServiceRefusal';
 // ServiceClient is the one HTTP transport every service call flows through; exported for the
 // app-level owners of ambient client-context headers (see setDefaultHeadersProvider) and of

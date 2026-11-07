@@ -1,6 +1,7 @@
 import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { KEEPALIVE_BUDGET_BYTES, ServiceClient } from '../src/ServiceClient';
+import { ServiceRefusal } from '../src/ServiceRefusal';
 import { ServiceTransportError } from '../src/ServiceTransportError';
 
 // Node's Request rejects the relative service paths a browser resolves against the page origin
@@ -67,6 +68,65 @@ describe('ServiceClient error parsing', () => {
     stubFetch({ status: 200, statusText: 'OK', body: { serializedReturn: Serializer.serialize('ok') } });
 
     await expect(createClient().send()).resolves.toBe('ok');
+  });
+
+  // THE SERVER'S REFUSAL CROSSES THE WIRE TYPED (a space's page on a phone read every verdict as a fault — the
+  // client threw a plain Error for a 404 and a 500 alike, and a stale copy painted where the honest failed face
+  // belonged): an answer in the router's shape under a refusal's status is the ServiceRefusal the operation made.
+  const rejection = async (): Promise<unknown> =>
+    createClient()
+      .send()
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+  it.each([403, 404, 409, 501])(
+    'a %s carrying the router’s body is the operation’s refusal: a ServiceRefusal with that status and the message',
+    async (status) => {
+      stubFetch({ status, statusText: 'Refused', body: { error: 'Space not found' } });
+
+      const error = await rejection();
+      expect(ServiceRefusal.is(error)).toBe(true);
+      expect(error).toMatchObject({ status, message: 'Space not found' });
+    }
+  );
+
+  it('a 500 carrying the router’s body is a fault, never a refusal — the plain error with the message', async () => {
+    stubFetch({ status: 500, statusText: 'Internal Server Error', body: { error: 'Internal server error' } });
+
+    const error = await rejection();
+    expect(ServiceRefusal.is(error)).toBe(false);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('Internal server error');
+  });
+
+  it('a 400 carrying the router’s body stays the plain error — the router answers every wrapped failure 400 too', async () => {
+    stubFetch({
+      status: 400,
+      statusText: 'Bad Request',
+      body: { error: 'Release blocked: workspace has uncommitted changes' },
+    });
+
+    const error = await rejection();
+    expect(ServiceRefusal.is(error)).toBe(false);
+    expect((error as Error).message).toBe('Release blocked: workspace has uncommitted changes');
+  });
+
+  it('a 404 with no router body (a proxy’s page) is nobody’s refusal — the statusText fallback, untyped', async () => {
+    stubFetch({
+      status: 404,
+      statusText: 'Not Found',
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON');
+      },
+    });
+
+    const error = await rejection();
+    expect(ServiceRefusal.is(error)).toBe(false);
+    expect((error as Error).message).toBe(
+      'Failed to process service request: /service/@test/test/TestService/doThing, error: Not Found'
+    );
   });
 });
 

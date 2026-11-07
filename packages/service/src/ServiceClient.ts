@@ -2,6 +2,7 @@ import { Method } from '@proteinjs/reflection';
 import { Serializer } from '@proteinjs/serializer';
 import { Debouncer } from '@proteinjs/util';
 import { isVoidReturnType } from './isVoidReturnType';
+import { ServiceRefusal } from './ServiceRefusal';
 import { ServiceTransportError } from './ServiceTransportError';
 import { Logger } from '@proteinjs/logger';
 
@@ -426,7 +427,10 @@ export class ServiceClient {
    * and reads its body as it always did; only the transport's own rejection is typed for it.
    * A 502 / 503 / 504 with no server answer in its body is a proxy's, not the server's: a transport
    * failure for a redeliverable delivery ({@link ServiceTransportError.unserved}), a verdict for any
-   * other. The delivery's `headers` are the call's own (an idempotency key), set after the ambient
+   * other. A verdict in the router's shape under a refusal's status (403 / 404 / 409 / 501) is the
+   * operation's own refusal, thrown again as the {@link ServiceRefusal} it was (its status, its
+   * message — {@link ServiceRefusal.fromWire}); every other verdict is the plain error carrying the
+   * message it always was. The delivery's `headers` are the call's own (an idempotency key), set after the ambient
    * provider's and under the reserved ones. The provider's keepalive ask is honoured inside the
    * page's budget ({@link KEEPALIVE_BUDGET_BYTES}), counted here before the request leaves.
    */
@@ -496,7 +500,9 @@ export class ServiceClient {
         if (delivery.redeliverable && !verdict.fromServer && PROXY_STATUSES.includes(response.status)) {
           throw ServiceTransportError.unserved(absoluteUrl, response.status, response.statusText);
         }
-        throw new Error(verdict.message);
+        // The server's own refusal crosses the wire typed; every other verdict is the plain error it always was.
+        const refusal = verdict.fromServer ? ServiceRefusal.fromWire(response.status, verdict.message) : undefined;
+        throw refusal ?? new Error(verdict.message);
       }
       return await this.readAnswer(response, absoluteUrl, delivery.redeliverable, () => stalled);
     } finally {
