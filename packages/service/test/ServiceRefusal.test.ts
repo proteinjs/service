@@ -6,6 +6,11 @@
  * the executor logs it at WARN with the status and the operation's name — never the arguments.
  * Every other thrown error keeps ERROR + 400.
  *
+ * The data layer's row-level denial — @proteinjs/db's `RecordAccessError`, thrown when a caller
+ * passes a table's door but lacks the per-row grant — is a refusal too: the caller may not, which
+ * is a 403, never a 400 failure with an ERROR line. Read by name, since this package sits below
+ * the data layer.
+ *
  * Asserted through the router's front door (the status and body a client receives) and the
  * executor's log writer (the level and fields of every entry the call wrote).
  */
@@ -134,6 +139,39 @@ describe('a refusal is logged at WARN, never as a failure', () => {
     for (const entry of entries) {
       expect(entryText(entry)).not.toContain(SECRET_ARG);
     }
+  });
+});
+
+describe("the data layer's row-level denial is a 403 refusal", () => {
+  it('a RecordAccessError (read by name) reaches the client as 403 with its message, logged at WARN, never ERROR', async () => {
+    const denial = Object.assign(new Error('You do not have access to this record'), { name: 'RecordAccessError' });
+    const { router, entries } = routerThrowing(denial);
+
+    const sent = await call(router);
+
+    expect(sent.status).toBe(403);
+    expect(sent.body).toEqual({ error: 'You do not have access to this record' });
+    expect(entries.filter((entry) => entry.logLevel === 'error')).toEqual([]);
+    const warnings = entries.filter((entry) => entry.logLevel === 'warn');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].obj?.functionName).toBe('TestService.readFile');
+    expect(warnings[0].obj?.status).toBe(403);
+  });
+
+  it('on the fire-and-forget path too (doNotAwait): the one denial is the same WARN refusal at 403, never an ERROR', async () => {
+    const denial = Object.assign(new Error('You do not have access to this record'), { name: 'RecordAccessError' });
+    const { router, entries } = routerThrowing(denial, { doNotAwait: true });
+
+    const sent = await call(router);
+    // The client already has its answer; the denial settles after it and reaches only the log.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(sent.status ?? 200).toBe(200);
+    expect(entries.filter((entry) => entry.logLevel === 'error')).toEqual([]);
+    const warnings = entries.filter((entry) => entry.logLevel === 'warn');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].obj?.functionName).toBe('TestService.readFile');
+    expect(warnings[0].obj?.status).toBe(403);
   });
 });
 

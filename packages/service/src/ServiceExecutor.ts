@@ -222,6 +222,12 @@ export class ServiceExecutor {
             this.logRefusal(error, requestId, startTime);
             return;
           }
+          if (ServiceExecutor.isRecordAccessDenial(error)) {
+            // The data layer's row-level denial is the same 403 refusal on this path — the one
+            // denial reads as one thing in the log whichever path settled it.
+            this.logRefusal(new ServiceRefusal(403, error.message), requestId, startTime);
+            return;
+          }
           this.logger.error({
             message: `Failed (doNotAwait, after the client response)`,
             error,
@@ -237,6 +243,17 @@ export class ServiceExecutor {
         // status and message.
         this.logRefusal(error, requestId, startTime);
         throw error;
+      }
+
+      if (ServiceExecutor.isRecordAccessDenial(error)) {
+        // A row-level capability denial from the data layer (@proteinjs/db's RecordAccessError —
+        // the caller passed the table's door but lacks the per-row grant): the caller may not,
+        // which is a 403 refusal, not a failure. Read by name — this package sits below the data
+        // layer and its errors cross package compile targets (the same reason refusals are read
+        // by shape). The data layer's message is written for the caller and crosses the wire.
+        const refusal = new ServiceRefusal(403, error.message);
+        this.logRefusal(refusal, requestId, startTime);
+        throw refusal;
       }
 
       this.logger.error({
@@ -320,6 +337,15 @@ export class ServiceExecutor {
         durationMs: Date.now() - startTime,
       },
     });
+  }
+
+  /**
+   * A row-level capability denial from the data layer (`RecordAccessError`, name-tagged by
+   * @proteinjs/db for the same cross-target reason refusals are read by shape): the caller may
+   * not reach that row.
+   */
+  private static isRecordAccessDenial(error: unknown): error is Error {
+    return !!error && typeof error === 'object' && (error as { name?: unknown }).name === 'RecordAccessError';
   }
 
   /** One shape summary per argument. */
